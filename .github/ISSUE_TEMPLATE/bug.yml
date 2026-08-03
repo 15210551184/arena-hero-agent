@@ -1,0 +1,51 @@
+name: Bug report
+description: Report reproducible tactic, runtime, or deployment behavior.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include API keys, model credentials, player IDs, or unredacted production logs.
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: What happened, and at which Tick or deployment stage?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Agent version or commit
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Windows local
+        - Linux/macOS local
+        - Docker Compose
+        - Linux systemd
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Provide minimal redacted diagnostics or reproduction steps.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Secret check
+      options:
+        - label: I removed credentials, player identifiers, hostnames, IP addresses, and private logs.
+          required: true

@@ -1,0 +1,43 @@
+[Unit]
+Description=Arena Hero deterministic unattended optimizer
+After=arena-hero-agent.service systemd-journald.service arena-hero-version-monitor.service
+Wants=arena-hero-agent.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/arena-hero-agent
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/arena-hero-agent/.venv/bin/arena-hero-optimizer --compatibility-marker /var/lib/arena-hero-version/compatibility-hold.json
+TimeoutStartSec=3min
+UMask=0077
+
+StateDirectory=arena-hero-optimizer
+StateDirectoryMode=0700
+ReadWritePaths=/etc/arena-hero-agent /var/lib/arena-hero-optimizer
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateNetwork=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=arena-hero-optimizer

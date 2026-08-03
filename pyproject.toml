@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arena-hero-agent"
+version = "0.1.0"
+description = "A deterministic, resource-first unattended agent for Arena Hero."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = [
+    "arena-hero==0.2.6",
+    "httpx==0.28.1",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Private :: Do Not Upload",
+]
+
+[project.scripts]
+arena-hero-agent = "arena_farmer:main"
+arena-hero-supervisor = "arena_supervisor:main"
+arena-hero-optimizer = "arena_optimizer:main"
+arena-hero-version-monitor = "arena_version_monitor:main"
+
+[tool.setuptools]
+py-modules = [
+    "arena_farmer",
+    "arena_optimizer",
+    "arena_supervisor",
+    "arena_version_monitor",
+]

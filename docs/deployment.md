@@ -1,0 +1,181 @@
+# Deployment Guide
+
+## Deployment Matrix
+
+| Mode | Recommended for | Restarts | Compatibility monitor | Supervisor | Root optimizer |
+| --- | --- | --- | --- | --- | --- |
+| Windows script | Interactive desktop use | transient failures | no | no | no |
+| POSIX script | Interactive local use | transient failures | no | no | no |
+| Docker Compose | Simple isolated 24/7 Agent | yes | no | no | no |
+| Linux systemd | Full unattended server | yes | yes | optional | optional |
+
+The deterministic Agent is the same in every mode. Docker intentionally excludes host-journal supervision and runtime optimization because those components depend on systemd and journald.
+
+## Local Windows
+
+Install Python 3.11 or newer, then run from PowerShell:
+
+```powershell
+.\scripts\bootstrap.ps1
+.\start_agent.ps1
+```
+
+Useful overrides:
+
+```powershell
+.\start_agent.ps1 -WorkerTarget 12 -BeaconPolicy retreat -NoCompatibilityMarker
+```
+
+Stop with `Ctrl+C`. When using `start_agent.cmd`, an initialization failure pauses the terminal so the error remains visible.
+
+## Local Linux or macOS
+
+```bash
+sh scripts/bootstrap.sh
+cp .env.example .env
+chmod 600 .env
+sh scripts/run-agent.sh
+```
+
+Set `ARENA_WORKER_TARGET`, `ARENA_BEACON_POLICY`, or `ARENA_HERO_ENV_FILE` to override defaults. Additional CLI arguments are passed through:
+
+```bash
+ARENA_WORKER_TARGET=10 sh scripts/run-agent.sh --base-url https://api.arenahero.io
+```
+
+Stop with `Ctrl+C`.
+
+## Docker Compose
+
+Create the ignored runtime secret:
+
+```bash
+mkdir -p secrets
+cp secrets/arena_hero_api_key.example.txt secrets/arena_hero_api_key.txt
+chmod 600 secrets/arena_hero_api_key.txt
+```
+
+Replace the placeholder with the key, then:
+
+```bash
+docker compose up -d --build
+docker compose ps
+docker compose logs -f agent
+```
+
+Change the strategy without editing Compose:
+
+```bash
+ARENA_WORKER_TARGET=10 ARENA_BEACON_POLICY=hold docker compose up -d
+```
+
+Stop and retain the image:
+
+```bash
+docker compose stop
+```
+
+Remove the Compose container and network:
+
+```bash
+docker compose down
+```
+
+The secret file stays on the host and is never copied into the image. Docker Compose mounts it under `/run/secrets` for the entrypoint to read.
+
+## Linux systemd Server
+
+The installer targets standard systemd distributions and requires root, `useradd`, Python 3.11+, and network access to install Python dependencies.
+
+### Default installation
+
+```bash
+sudo sh scripts/install-systemd.sh
+```
+
+This creates dedicated service users, installs the project into `/opt/arena-hero-agent/.venv`, stores the Arena Hero credential as `/etc/arena-hero-agent.env` with restricted permissions, and enables:
+
+- `arena-hero-agent.service`
+- `arena-hero-version-monitor.timer`
+
+The installer preserves an existing game credential and runtime tuning file during upgrades.
+
+For non-interactive provisioning, put only the key on the first line of a protected file:
+
+```bash
+sudo sh scripts/install-systemd.sh --api-key-file /secure/path/arena-key.txt
+```
+
+### Deterministic supervisor
+
+```bash
+sudo sh scripts/install-systemd.sh --with-supervisor
+```
+
+This enables `arena-hero-supervisor.timer`. It reads the current Agent invocation from journald, writes reports under `/var/lib/arena-hero-supervisor`, and does not require any model credential.
+
+### Optional AI review
+
+Prepare a private file based on `deploy/arena-hero-supervisor.env.example`, set `ARENA_SUPERVISOR_AI_ENABLED=true`, and fill in a Responses-compatible endpoint, key, and model list. Then:
+
+```bash
+sudo chmod 600 /secure/path/supervisor.env
+sudo sh scripts/install-systemd.sh --with-ai /secure/path/supervisor.env
+```
+
+Anomaly triggers are deterministic. AI is skipped for healthy windows and cannot control game actions.
+
+### Optional optimizer
+
+```bash
+sudo sh scripts/install-systemd.sh --with-optimizer
+```
+
+The optimizer runs as root, writes `/etc/arena-hero-agent/runtime.env`, and can restart the Agent. Enable it only after reviewing `arena_optimizer.py`, the service hardening, and the rollback behavior. It is not required for long-running collection.
+
+### Operations
+
+```bash
+sudo systemctl status arena-hero-agent.service --no-pager
+sudo journalctl -fu arena-hero-agent.service -o short-iso-precise
+sudo systemctl list-timers 'arena-hero-*'
+```
+
+Stop only the game Agent:
+
+```bash
+sudo systemctl stop arena-hero-agent.service
+```
+
+Disable all unattended activity:
+
+```bash
+sudo systemctl disable --now arena-hero-agent.service
+sudo systemctl disable --now arena-hero-version-monitor.timer
+sudo systemctl disable --now arena-hero-supervisor.timer
+sudo systemctl disable --now arena-hero-optimizer.timer
+```
+
+The supervisor and optimizer are oneshot services; stop an active run with `systemctl stop arena-hero-supervisor.service` or `systemctl stop arena-hero-optimizer.service`.
+
+### Updating and rollback
+
+Check out a reviewed release and rerun the installer. Existing `/etc` credentials and runtime tuning are retained unless an explicit replacement file is provided.
+
+Before updating, record the installed version and back up the restricted configuration:
+
+```bash
+/opt/arena-hero-agent/.venv/bin/python -m pip show arena-hero-agent
+sudo install -d -m 0700 /root/arena-hero-agent-backup
+sudo cp -a /etc/arena-hero-agent.env /etc/arena-hero-agent /root/arena-hero-agent-backup/
+```
+
+To roll back, check out the previous release and rerun `sudo sh scripts/install-systemd.sh`. The installer upgrades the virtual environment from the selected source tree.
+
+## Credential Hygiene
+
+- Keep Arena Hero and model keys in separate files.
+- Never place either key in Compose YAML, systemd units, screenshots, issues, or logs.
+- Keep secret files mode `0600` before installation.
+- Rotate a key immediately if it has appeared outside its intended secret store.
+- Run `python scripts/check_secrets.py` before publishing.

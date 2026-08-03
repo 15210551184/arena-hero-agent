@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose a tactic, observability, or deployment improvement.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the concrete problem or repeated unhealthy window.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: risk
+    attributes:
+      label: Risk and tradeoffs
+      description: Include effects on Core survival, resource economy, privileges, or compatibility.
+    validations:
+      required: true

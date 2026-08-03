@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
+        run: python -m pip install --editable .
+      - name: Compile
+        run: python -m compileall -q arena_farmer.py arena_supervisor.py arena_optimizer.py arena_version_monitor.py
+      - name: Test
+        run: python -m unittest discover -v
+      - name: Validate CLI entry points
+        run: |
+          arena-hero-agent --help
+          arena-hero-supervisor --help
+          arena-hero-optimizer --help
+          arena-hero-version-monitor --help
+
+  public-surface:
+    name: Public surface and deployment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Scan tracked files for credentials
+        run: python scripts/check_secrets.py
+      - name: Validate shell scripts
+        run: sh -n docker/entrypoint.sh scripts/bootstrap.sh scripts/run-agent.sh scripts/install-systemd.sh
+      - name: Validate PowerShell scripts
+        shell: pwsh
+        run: |
+          Get-ChildItem start_agent.ps1, scripts/*.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors) { throw ($errors | Out-String) }
+          }
+      - name: Validate Compose and image
+        run: |
+          mkdir -p secrets
+          printf 'ci-placeholder\n' > secrets/arena_hero_api_key.txt
+          docker compose config --quiet
+          docker build --tag arena-hero-agent:ci .
+      - name: Validate systemd units
+        run: |
+          for account in arena-hero arena-hero-version arena-hero-supervisor; do
+            sudo groupadd --system "$account" || true
+            sudo useradd --system --no-create-home --gid "$account" "$account" || true
+          done
+          sudo install -d -m 0750 /etc/arena-hero-agent
+          sudo install -m 0640 /dev/null /etc/arena-hero-agent.env
+          sudo install -m 0640 /dev/null /etc/arena-hero-agent/runtime.env
+          sudo install -m 0640 /dev/null /etc/arena-hero-supervisor.env
+          sudo install -d /opt/arena-hero-agent/.venv/bin
+          for command in arena-hero-agent arena-hero-supervisor arena-hero-optimizer arena-hero-version-monitor; do
+            sudo touch "/opt/arena-hero-agent/.venv/bin/$command"
+            sudo chmod 0755 "/opt/arena-hero-agent/.venv/bin/$command"
+          done
+          systemd-analyze verify deploy/*.service deploy/*.timer

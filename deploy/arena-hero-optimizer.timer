@@ -1,0 +1,15 @@
+[Unit]
+Description=Run Arena Hero optimizer after each supervisor window
+After=arena-hero-supervisor.timer
+
+[Timer]
+# The supervisor runs at the top of each six-hour block with up to 30 minutes
+# of jitter. Start the optimizer after that window, with a small extra jitter.
+OnCalendar=*-*-* 00/6:35:00
+Persistent=true
+RandomizedDelaySec=5min
+AccuracySec=1min
+Unit=arena-hero-optimizer.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Arena Hero anomaly-gated supervisor every six hours
+
+[Timer]
+OnCalendar=*-*-* 00/6:00:00
+Persistent=true
+RandomizedDelaySec=30min
+AccuracySec=1min
+Unit=arena-hero-supervisor.service
+
+[Install]
+WantedBy=timers.target

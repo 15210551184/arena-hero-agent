@@ -1,0 +1,46 @@
+[Unit]
+Description=Arena Hero anomaly-gated supervisor report
+After=network-online.target systemd-journald.service arena-hero-version-monitor.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=arena-hero-supervisor
+Group=arena-hero-supervisor
+SupplementaryGroups=systemd-journal
+WorkingDirectory=/opt/arena-hero-agent
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=ARENA_SUPERVISOR_AI_ENABLED=false
+EnvironmentFile=-/etc/arena-hero-supervisor.env
+ExecStart=/opt/arena-hero-agent/.venv/bin/arena-hero-supervisor --compatibility-marker /var/lib/arena-hero-version/compatibility-hold.json
+TimeoutStartSec=5min
+UMask=0077
+
+StateDirectory=arena-hero-supervisor
+StateDirectoryMode=0700
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=arena-hero-supervisor

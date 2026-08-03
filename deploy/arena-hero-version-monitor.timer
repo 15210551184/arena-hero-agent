@@ -1,0 +1,13 @@
+[Unit]
+Description=Check Arena Hero compatibility every six hours
+
+[Timer]
+# Complete shortly before the supervisor and optimizer cycle.
+OnCalendar=*-*-* 05/6:45:00
+Persistent=true
+RandomizedDelaySec=5min
+AccuracySec=1min
+Unit=arena-hero-version-monitor.service
+
+[Install]
+WantedBy=timers.target

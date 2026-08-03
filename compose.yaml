@@ -1,0 +1,29 @@
+services:
+  agent:
+    build:
+      context: .
+    image: arena-hero-agent:local
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      ARENA_HERO_API_KEY_FILE: /run/secrets/arena_hero_api_key
+    secrets:
+      - arena_hero_api_key
+    command:
+      - arena-hero-agent
+      - --worker-target
+      - "${ARENA_WORKER_TARGET:-12}"
+      - --beacon-policy
+      - "${ARENA_BEACON_POLICY:-retreat}"
+      - --no-compatibility-marker
+
+secrets:
+  arena_hero_api_key:
+    file: "${ARENA_HERO_API_KEY_SECRET_FILE:-./secrets/arena_hero_api_key.txt}"

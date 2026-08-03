@@ -1,0 +1,41 @@
+# Credentials and machine-local configuration
+.env
+.env.*
+!.env.example
+!*.env.example
+*.local.env
+*.secret.env
+/secrets/*
+!/secrets/.gitignore
+!/secrets/*.example.txt
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+build/
+dist/
+
+# Runtime state and logs
+*.log
+*.log.*
+reports/
+state/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local research and accidental artifacts
+/.tmp-*
+/0.2.4
