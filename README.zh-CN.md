@@ -117,6 +117,7 @@ sudo sh scripts/install-systemd.sh --with-optimizer
 
 ## 文档与社区
 
+- [LINUX DO](https://linux.do/) - 本项目认可并支持的开源社区
 - [文档索引](docs/README.md)
 - [策略设计](docs/strategy.md)
 - [参与贡献](CONTRIBUTING.md)

@@ -145,6 +145,7 @@ Before the first public commit, follow the [release checklist](docs/release-chec
 
 ## Documentation and Community
 
+- [LINUX DO](https://linux.do/) - an open-source community this project recognizes and supports
 - [Documentation index](docs/README.md)
 - [Strategy design](docs/strategy.md)
 - [Contributing](CONTRIBUTING.md)
