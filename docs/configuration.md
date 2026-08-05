@@ -17,8 +17,27 @@ The main Agent requires only an Arena Hero API key. Configuration precedence is:
 | `--beacon-policy` | `retreat` | `hold`, `pursue`, or `retreat`. |
 | `--compatibility-marker` | systemd marker path | Enter compatibility hold while the file exists. |
 | `--no-compatibility-marker` | off | Disable marker checks for local/container runs. |
+| `--heartbeat-file` | none | Write liveness metadata after each accepted Turn. |
+| `--stale-turn-timeout-seconds` | `0` | Exit with a transient failure after no accepted Turn; `0` disables. |
 
 The supported unattended profile is `--worker-target 12 --beacon-policy retreat`, yielding a maximum planned population of 19.
+
+Docker Compose enables the stale-Turn timeout at 150 seconds. The systemd unit
+uses 90 seconds, below its 120-second systemd watchdog, so a reconnect loop that
+produces no accepted Turns is rebuilt instead of remaining unhealthy forever.
+
+## Manual UI Interoperability
+
+Avoid controlling the same fleet from the web UI and this Agent at the same
+time. Plans are source-scoped and a manual plan can replace actions the Agent
+expected to own; the Agent logs manual receipt counts but intentionally does not
+print plan contents.
+
+Core migration takes four Ticks and requires an explicit `CANCEL_MOVE` action to
+reset progress. If the Arena Hero web UI cannot express that action, or its
+pending-command list shows only opaque identifiers, that is an upstream UI
+limitation rather than an Agent protocol feature. Object UUIDs in Turn state and
+receipts are authoritative when filing an upstream report.
 
 ## systemd Runtime Tuning
 

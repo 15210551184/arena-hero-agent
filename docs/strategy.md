@@ -15,6 +15,12 @@ The mature target is:
 
 Production reserves resources between stages and does not build beyond the configured Worker target and defense targets.
 
+The proposed `15 Worker + 2 Vanguard + 2 Ranger` profile also stays at 19, but
+it removes one Vanguard and two Rangers from the current survival envelope. It
+remains an A/B-test candidate rather than the default until collection
+throughput, unit loss, Core damage, healing cost, and unattended survival can be
+compared over equivalent windows.
+
 ## Core Safety
 
 - The Core is the highest-value object and is never intentionally self-destructed.
@@ -29,11 +35,22 @@ Production reserves resources between stages and does not build beyond the confi
 - Empty Workers and remembered resource cells are paired with deterministic minimum-cost matching. A small intent bonus prevents churn, but a materially closer Worker can take over a target; each resource remains assigned to at most one Worker.
 - Resource routes are released after six non-improving Ticks. Scout routes change direction after three non-improving Ticks, prioritize the least recently observed chunks, and avoid sending every Worker through the same corridor.
 - Loaded Workers prioritize a legal return route and account for Core movement.
+- A loaded Worker may use the second legal slot of a cell occupied by one
+  friendly unit. Core egress uses the same narrow exception, while normal
+  movement still reserves one destination per Tick to prevent uncontrolled
+  stacking.
 - Recovery mode protects the replacement Worker and dropped cargo after a Core loss.
 
 ## Combat Policy
 
 - Active enemy fleets cause spacing, screening, and fighting withdrawal rather than an unconditional stop.
+- A defender with a legal attack against an enemy that can damage the Core in
+  the current Tick counterattacks before generic retreat; this does not authorize
+  a chase.
+- During safe, uncongested windows, one wounded non-assault defender at a time
+  returns to a stationary, healthy Core for healing. The reserve covers the
+  exact missing HP, another same-type guard remains outside, and combat pressure
+  or imminent cargo delivery pauses the return.
 - Confirmed stationary units can be cleared by a small bounded strike group while guards remain with the Core.
 - A stationary Core is considered for a raid only after repeated observations and isolation checks. The Worker that exposed it may remain as the designated observer. The default strike group can engage from at most 48 path-independent Manhattan cells and releases a target if pulled beyond 56, while one Vanguard and one Ranger remain as Core guards.
 - Under gameplay v0.13, a strike Ranger may fire at the remembered cell of that confirmed stationary Core during a short visibility gap. Cell fire is not used for unconfirmed or mobile targets.

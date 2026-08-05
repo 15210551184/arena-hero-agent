@@ -37,6 +37,15 @@ chmod 600 .env
 sh scripts/run-agent.sh
 ```
 
+The bootstrap script checks `python3` and then versioned commands from
+`python3.13` through `python3.11`. To force a specific installation, set an
+explicit path; an incompatible explicit interpreter fails instead of silently
+falling back:
+
+```bash
+PYTHON_BIN="$(command -v python3.11)" sh scripts/bootstrap.sh
+```
+
 Set `ARENA_WORKER_TARGET`, `ARENA_BEACON_POLICY`, or `ARENA_HERO_ENV_FILE` to override defaults. Additional CLI arguments are passed through:
 
 ```bash
@@ -70,6 +79,12 @@ Turn. Inspect the exact heartbeat check with `docker inspect` or run it directly
 docker compose exec agent arena-hero-health --heartbeat-only --heartbeat-file /tmp/arena-hero-heartbeat.json
 ```
 
+Compose also enables a 150-second accepted-Turn deadline. If the SDK is still
+reconnecting but no plan has been accepted, the Agent exits with its transient
+failure code and Docker's `unless-stopped` policy rebuilds the process. A stale
+health status alone does not restart a Docker container, so the deadline is part
+of the unattended recovery path.
+
 Change the strategy without editing Compose:
 
 ```bash
@@ -102,12 +117,28 @@ ARENA_HERO_AGENT_IMAGE=ghcr.io/drew-z/arena-hero-agent:0.1.0 docker compose up -
 The installer targets standard GNU/Linux systemd distributions and requires
 root, systemd, Python 3.11+, Python `venv` support, `flock`, GNU `mv`/`readlink`,
 standard account/core utilities, and network access to install Python
-dependencies. On Debian or Ubuntu, install the common prerequisites with:
+dependencies. On Debian or Ubuntu whose default Python is already 3.11 or
+newer, install the common prerequisites with:
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y python3 python3-venv ca-certificates util-linux coreutils
 ```
+
+Ubuntu 22.04 ships Python 3.10 as `python3`. Provision a system-wide Python
+3.11+ and its matching `venv` package from an approved package source, then
+select it explicitly. For example, if `python3.11` is available from that
+source:
+
+```bash
+sudo apt-get install -y python3.11 python3.11-venv ca-certificates util-linux coreutils
+sudo sh scripts/install-systemd.sh --python "$(command -v python3.11)"
+```
+
+Without `--python`, the installer checks `python3`, `python3.13`, `python3.12`,
+and `python3.11` and selects the first compatible interpreter. A user-local
+Python must be passed by absolute path and remain executable by the installed
+service accounts; a system-wide interpreter is preferred for systemd.
 
 On RHEL-family systems, install the equivalent Python, pip/venv, systemd, and
 shadow-utils packages. The installer performs its command and `venv` preflight
@@ -147,6 +178,14 @@ enablement/running state, and the old release. Link changes are journaled: a
 handled interruption restores them immediately, while the next install or
 rollback repairs a transaction left by an uncatchable process or host failure.
 The failed immutable release is retained for diagnosis.
+
+The main unit uses a 90-second accepted-Turn deadline with systemd's 120-second
+watchdog as a second layer. Transient exit code 75 always restarts, while
+authentication, policy, protocol, configuration, and terminal Agent failures do
+not. Start-rate limiting is disabled for this unit so a prolonged network outage
+cannot leave it permanently stopped after a fixed retry burst. Core dumps are
+disabled for the service so a watchdog abort cannot persist the in-memory game
+credential.
 
 The installer preserves an existing game credential and runtime tuning file
 during upgrades. It also preserves a pre-versioned `/opt/arena-hero-agent/.venv`

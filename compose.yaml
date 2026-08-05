@@ -40,6 +40,8 @@ services:
       - --no-compatibility-marker
       - --heartbeat-file
       - /tmp/arena-hero-heartbeat.json
+      - --stale-turn-timeout-seconds
+      - "150"
 
 secrets:
   arena_hero_api_key:

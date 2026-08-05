@@ -2,8 +2,7 @@
 Description=Arena Hero resource collection agent
 After=network-online.target
 Wants=network-online.target
-StartLimitIntervalSec=300
-StartLimitBurst=10
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -19,13 +18,14 @@ EnvironmentFile=/etc/arena-hero-agent.env
 EnvironmentFile=-/etc/arena-hero-agent/runtime.env
 RuntimeDirectory=arena-hero-agent
 RuntimeDirectoryMode=0750
-ExecStart=/opt/arena-hero-agent/current/.venv/bin/arena-hero-agent --env-file /etc/arena-hero-agent.env --worker-target ${ARENA_WORKER_TARGET} --beacon-policy ${ARENA_BEACON_POLICY} --heartbeat-file /run/arena-hero-agent/heartbeat.json
+ExecStart=/opt/arena-hero-agent/current/.venv/bin/arena-hero-agent --env-file /etc/arena-hero-agent.env --worker-target ${ARENA_WORKER_TARGET} --beacon-policy ${ARENA_BEACON_POLICY} --heartbeat-file /run/arena-hero-agent/heartbeat.json --stale-turn-timeout-seconds 90
 Restart=on-failure
 RestartPreventExitStatus=2 10 11 12 13 14 130
 RestartForceExitStatus=75
 RestartSec=15s
 WatchdogSec=120s
 WatchdogSignal=SIGABRT
+LimitCORE=0
 NotifyAccess=main
 KillSignal=SIGINT
 TimeoutStopSec=20s

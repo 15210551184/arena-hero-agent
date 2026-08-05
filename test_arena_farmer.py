@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import io
 import tempfile
+import threading
 import unittest
 from collections import deque
 from contextlib import redirect_stderr
@@ -766,6 +767,44 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertEqual(position, (0, 0))
         self.assertEqual(queued["unit_actions"][WORKER_1]["type"], "DEPOSIT")
         self.assertEqual(len(visited), len(set(visited)))
+
+    def test_cargo_worker_uses_second_slot_in_single_friendly_corridor(self) -> None:
+        queued = plan(
+            make_turn(
+                units=[
+                    unit(WORKER_1, "WORKER", (2, 0), cargo=1),
+                    unit(VANGUARD_1, "VANGUARD", (1, 0)),
+                ],
+                obstacles=[(2, -1), (2, 1), (3, 0)],
+            ),
+            beacon_policy="hold",
+        )
+
+        self.assertEqual(
+            queued["unit_actions"][WORKER_1],
+            {"type": "MOVE", "direction": "LEFT"},
+        )
+
+    def test_defender_and_cargo_worker_swap_through_legal_second_slots(self) -> None:
+        queued = plan(
+            make_turn(
+                units=[
+                    unit(WORKER_1, "WORKER", (1, 0), cargo=1),
+                    unit(VANGUARD_1, "VANGUARD", (0, 0)),
+                ],
+                obstacles=[(-1, 0), (0, -1), (0, 1)],
+            ),
+            beacon_policy="hold",
+        )
+
+        self.assertEqual(
+            queued["unit_actions"][VANGUARD_1],
+            {"type": "MOVE", "direction": "RIGHT"},
+        )
+        self.assertEqual(
+            queued["unit_actions"][WORKER_1],
+            {"type": "MOVE", "direction": "LEFT"},
+        )
 
     def test_cargo_worker_cancels_moving_core_for_delivery(self) -> None:
         queued = plan(
@@ -1771,6 +1810,90 @@ class CoreFarmerTests(unittest.TestCase):
         )
         self.assertEqual(queued["unit_actions"][RANGER_1]["type"], "HEAL")
 
+    def test_damaged_defender_returns_to_core_when_guard_is_preserved(self) -> None:
+        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        turn = make_turn(
+            resources=12,
+            units=[
+                unit(VANGUARD_1, "VANGUARD", (2, 0), hp=2),
+                unit(VANGUARD_2, "VANGUARD", (0, 3)),
+                unit(RANGER_1, "RANGER", (0, -2)),
+            ],
+        )
+
+        tactic.choose_actions(turn)
+        queued = turn.plan.model_dump(mode="json", exclude_none=True)
+
+        self.assertEqual(tactic.healing_defender_ids, {UUID(VANGUARD_1)})
+        self.assertEqual(
+            queued["unit_actions"][VANGUARD_1],
+            {"type": "MOVE", "direction": "LEFT"},
+        )
+
+    def test_healing_return_keeps_one_same_type_guard(self) -> None:
+        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        turn = make_turn(
+            resources=20,
+            units=[unit(VANGUARD_1, "VANGUARD", (2, 0), hp=2)],
+        )
+
+        tactic.choose_actions(turn)
+
+        self.assertEqual(tactic.healing_defender_ids, set())
+
+    def test_healing_return_is_cancelled_if_same_type_guard_is_lost(self) -> None:
+        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        first = make_turn(
+            tick=100,
+            resources=20,
+            units=[
+                unit(VANGUARD_1, "VANGUARD", (2, 0), hp=2),
+                unit(VANGUARD_2, "VANGUARD", (0, 3)),
+            ],
+        )
+        tactic.choose_actions(first)
+        self.assertEqual(tactic.healing_defender_ids, {UUID(VANGUARD_1)})
+
+        after_guard_loss = make_turn(
+            tick=101,
+            resources=20,
+            units=[unit(VANGUARD_1, "VANGUARD", (1, 0), hp=2)],
+        )
+        tactic.choose_actions(after_guard_loss)
+
+        self.assertEqual(tactic.healing_defender_ids, set())
+
+    def test_healing_return_pauses_for_delivery_congestion(self) -> None:
+        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        turn = make_turn(
+            resources=20,
+            units=[
+                unit(WORKER_1, "WORKER", (1, 0), cargo=1),
+                unit(VANGUARD_1, "VANGUARD", (2, 0), hp=2),
+                unit(VANGUARD_2, "VANGUARD", (0, 3)),
+            ],
+        )
+
+        tactic.choose_actions(turn)
+
+        self.assertEqual(tactic.healing_defender_ids, set())
+
+    def test_only_one_wounded_defender_returns_at_a_time(self) -> None:
+        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        turn = make_turn(
+            resources=30,
+            units=[
+                unit(VANGUARD_1, "VANGUARD", (2, 0), hp=2),
+                unit(VANGUARD_2, "VANGUARD", (0, 3)),
+                unit(RANGER_1, "RANGER", (-2, 0), hp=1),
+                unit(RANGER_2, "RANGER", (0, -2)),
+            ],
+        )
+
+        tactic.choose_actions(turn)
+
+        self.assertEqual(len(tactic.healing_defender_ids), 1)
+
     def test_core_continues_after_arrival_without_cargo(self) -> None:
         queued = plan(
             make_turn(
@@ -1896,6 +2019,23 @@ class CoreFarmerTests(unittest.TestCase):
         tactic.choose_actions(depositing)
         second_plan = depositing.plan.model_dump(mode="json", exclude_none=True)
         self.assertEqual(second_plan["unit_actions"][WORKER_2]["type"], "DEPOSIT")
+
+    def test_visible_enemy_worker_does_not_disable_safe_delivery_handoff(self) -> None:
+        queued = plan(
+            make_turn(
+                units=[
+                    unit(WORKER_1, "WORKER", (0, 0), cargo=0),
+                    unit(WORKER_2, "WORKER", (1, 0), cargo=1),
+                    unit(VANGUARD_1, "VANGUARD", (0, -1)),
+                    unit(RANGER_1, "RANGER", (0, 1)),
+                ],
+                enemies=[unit(ENEMY_1, "WORKER", (20, 0), controlled=False)],
+                obstacles=[(-1, 0)],
+            )
+        )
+
+        self.assertEqual(queued["unit_actions"][WORKER_1]["type"], "MOVE")
+        self.assertEqual(queued["unit_actions"][WORKER_2]["direction"], "LEFT")
 
     def test_delivery_handoff_shifts_multi_unit_corridor(self) -> None:
         tactic = CoreFarmer(worker_target=1, beacon_policy="retreat")
@@ -3065,6 +3205,53 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertEqual(queued["unit_actions"][VANGUARD_1]["type"], "MOVE")
         self.assertEqual(queued["unit_actions"][RANGER_1]["type"], "MOVE")
 
+    def test_vanguard_counterattacks_immediate_core_threat_before_retreat(self) -> None:
+        queued = plan(
+            make_turn(
+                units=[unit(VANGUARD_1, "VANGUARD", (0, 0))],
+                enemies=[
+                    unit(ENEMY_1, "VANGUARD", (1, 0), controlled=False),
+                ],
+            ),
+            beacon_policy="hold",
+        )
+
+        self.assertEqual(
+            queued["unit_actions"][VANGUARD_1],
+            {"type": "SWEEP", "direction": "RIGHT"},
+        )
+
+    def test_ranger_counterattacks_clear_core_threat_before_retreat(self) -> None:
+        queued = plan(
+            make_turn(
+                units=[unit(RANGER_1, "RANGER", (0, 0))],
+                enemies=[
+                    unit(ENEMY_1, "RANGER", (3, 0), controlled=False),
+                ],
+            ),
+            beacon_policy="hold",
+        )
+
+        self.assertEqual(queued["unit_actions"][RANGER_1]["type"], "SHOOT")
+        self.assertEqual(
+            UUID(queued["unit_actions"][RANGER_1]["target_id"]),
+            UUID(ENEMY_1),
+        )
+
+    def test_obstacle_blocks_core_threat_counterattack(self) -> None:
+        queued = plan(
+            make_turn(
+                units=[unit(RANGER_1, "RANGER", (0, 0))],
+                enemies=[
+                    unit(ENEMY_1, "RANGER", (3, 0), controlled=False),
+                ],
+                obstacles=[(1, 0)],
+            ),
+            beacon_policy="hold",
+        )
+
+        self.assertNotEqual(queued["unit_actions"][RANGER_1]["type"], "SHOOT")
+
     def test_defenders_attack_only_when_escape_is_blocked(self) -> None:
         queued = plan(
             make_turn(
@@ -3290,9 +3477,64 @@ class EventLoopTests(unittest.TestCase):
         parser = build_parser()
         disabled = parser.parse_args(["--no-compatibility-marker"])
         custom = parser.parse_args(["--compatibility-marker", "custom-hold.json"])
+        watchdog = parser.parse_args(["--stale-turn-timeout-seconds", "45"])
 
         self.assertIsNone(disabled.compatibility_marker)
         self.assertEqual(custom.compatibility_marker, Path("custom-hold.json"))
+        self.assertEqual(watchdog.stale_turn_timeout_seconds, 45)
+
+    def test_stale_turn_watchdog_closes_stream_for_supervisor_restart(self) -> None:
+        instances: list[FakeGame] = []
+
+        class FakeGame:
+            def __init__(self, **_kwargs: object) -> None:
+                self.closed = threading.Event()
+                instances.append(self)
+
+            def __enter__(self) -> FakeGame:
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                self.close()
+
+            def close(self) -> None:
+                self.closed.set()
+
+            def events(self):
+                self.closed.wait(timeout=1)
+                if False:
+                    yield None
+
+        errors = io.StringIO()
+        with (
+            patch("arena_farmer.ArenaHeroClient", FakeGame),
+            redirect_stderr(errors),
+            self.assertRaisesRegex(OSError, "unattended recovery timeout"),
+        ):
+            play(
+                "test-only-key",
+                base_url="https://example.test",
+                worker_target=12,
+                beacon_policy="retreat",
+                stale_turn_timeout_seconds=0.05,
+            )
+
+        self.assertTrue(instances[0].closed.is_set())
+        self.assertIn("restarting the Agent", errors.getvalue())
+
+    def test_stale_turn_watchdog_rejects_nonfinite_timeouts(self) -> None:
+        for timeout in (float("nan"), float("inf")):
+            with self.subTest(timeout=timeout), self.assertRaisesRegex(
+                ValueError,
+                "must be finite",
+            ):
+                play(
+                    "test-only-key",
+                    base_url="https://example.test",
+                    worker_target=12,
+                    beacon_policy="retreat",
+                    stale_turn_timeout_seconds=timeout,
+                )
 
     def test_systemd_notify_is_optional_outside_service(self) -> None:
         previous = os.environ.pop("NOTIFY_SOCKET", None)

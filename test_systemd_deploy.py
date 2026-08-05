@@ -12,8 +12,98 @@ except ImportError:  # pragma: no cover - unavailable on Windows
 
 
 REPO_ROOT = Path(__file__).resolve().parent
+BOOTSTRAP = REPO_ROOT / "scripts" / "bootstrap.sh"
 INSTALLER = REPO_ROOT / "scripts" / "install-systemd.sh"
 ROLLBACK = REPO_ROOT / "scripts" / "rollback-systemd.sh"
+
+
+@unittest.skipUnless(os.name == "posix", "POSIX bootstrap tests require sh")
+class PosixBootstrapTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.project = self.root / "project"
+        self.fake_bin = self.root / "fake-bin"
+        (self.project / "scripts").mkdir(parents=True)
+        self.fake_bin.mkdir()
+        bootstrap = self.project / "scripts" / "bootstrap.sh"
+        bootstrap.write_text(BOOTSTRAP.read_text(encoding="utf-8"), encoding="utf-8")
+        bootstrap.chmod(0o755)
+        (self.project / "requirements-build.lock").write_text("", encoding="utf-8")
+        (self.project / "requirements.lock").write_text("", encoding="utf-8")
+        self.bootstrap = bootstrap
+        self.env = os.environ.copy()
+        self.env["PATH"] = f"{self.fake_bin}{os.pathsep}{self.env['PATH']}"
+        self.env.pop("PYTHON_BIN", None)
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    @staticmethod
+    def _write_executable(path: Path, content: str) -> None:
+        path.write_text(content, encoding="utf-8")
+        path.chmod(0o755)
+
+    def _write_compatible_python(self, name: str) -> Path:
+        path = self.fake_bin / name
+        self._write_executable(
+            path,
+            r'''#!/bin/sh
+set -eu
+if [ "${1:-}" = "-c" ]; then
+    exit 0
+fi
+if [ "${1:-}" = "-m" ] && [ "${2:-}" = "venv" ]; then
+    target=$3
+    mkdir -p "$target/bin"
+    cp "$0" "$target/bin/python"
+    chmod 0755 "$target/bin/python"
+    exit 0
+fi
+if [ "${1:-}" = "-m" ] && [ "${2:-}" = "pip" ]; then
+    exit 0
+fi
+exit 1
+''',
+        )
+        return path
+
+    def _write_rejecting_python(self, name: str) -> Path:
+        path = self.fake_bin / name
+        self._write_executable(path, "#!/bin/sh\nexit 1\n")
+        return path
+
+    def _run(self, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["sh", str(self.bootstrap)],
+            cwd=self.project,
+            env=env or self.env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def test_auto_detects_versioned_python_when_python3_is_too_old(self) -> None:
+        for name in ("python3", "python3.13", "python3.12"):
+            self._write_rejecting_python(name)
+        self._write_compatible_python("python3.11")
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.project / ".venv" / "bin" / "python").is_file())
+
+    def test_explicit_incompatible_python_does_not_fall_back(self) -> None:
+        incompatible = self._write_rejecting_python("python-old")
+        self._write_compatible_python("python3.11")
+        env = self.env | {"PYTHON_BIN": str(incompatible)}
+
+        result = self._run(env=env)
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("must be Python 3.11 or newer", result.stderr)
+        self.assertFalse((self.project / ".venv").exists())
 
 
 @unittest.skipUnless(
@@ -67,6 +157,31 @@ class SystemdDeploymentTests(unittest.TestCase):
     def _write_executable(self, path: Path, content: str) -> None:
         path.write_text(content, encoding="utf-8")
         path.chmod(0o755)
+
+    def _write_rejecting_python(self, name: str) -> Path:
+        path = self.fake_bin / name
+        self._write_executable(
+            path,
+            "#!/bin/sh\n"
+            "if [ \"${1:-}\" = \"-c\" ]; then exit 1; fi\n"
+            "exit 1\n",
+        )
+        return path
+
+    def _write_no_venv_python(self, name: str) -> Path:
+        path = self.fake_bin / name
+        self._write_executable(
+            path,
+            "#!/bin/sh\n"
+            "if [ \"${1:-}\" = \"-c\" ]; then\n"
+            "    case \"${2:-}\" in\n"
+            "        *sys.version_info*) exit 0 ;;\n"
+            "        *) exit 1 ;;\n"
+            "    esac\n"
+            "fi\n"
+            "exit 1\n",
+        )
+        return path
 
     def _write_fake_commands(self) -> None:
         fake_python = r'''#!/bin/sh
@@ -196,6 +311,56 @@ os.execv("/usr/bin/install", ["install", *args])
     def _resolved(self, name: str) -> Path:
         return (self.install_root / name).resolve(strict=True)
 
+    def test_auto_detects_python311_when_default_python_is_too_old(self) -> None:
+        compatible = (self.fake_bin / "python3").read_text(encoding="utf-8")
+        self._write_executable(self.fake_bin / "python3.11", compatible)
+        for name in ("python3", "python3.13", "python3.12"):
+            self._write_rejecting_python(name)
+        env = self.env.copy()
+        env.pop("PYTHON_BIN")
+
+        result = self._install("--no-start", env=env)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_explicit_incompatible_python_does_not_fall_back(self) -> None:
+        compatible = (self.fake_bin / "python3").read_text(encoding="utf-8")
+        self._write_executable(self.fake_bin / "python3.11", compatible)
+        incompatible = self._write_rejecting_python("python-old")
+        env = self.env.copy()
+        env["PYTHON_BIN"] = str(incompatible)
+
+        result = self._install("--no-start", env=env)
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Selected Python interpreter must be Python 3.11 or newer", result.stderr)
+        self.assertFalse(self.install_root.exists())
+
+    def test_auto_detection_reports_when_all_candidates_are_incompatible(self) -> None:
+        for name in ("python3", "python3.13", "python3.12", "python3.11"):
+            self._write_rejecting_python(name)
+        env = self.env.copy()
+        env.pop("PYTHON_BIN")
+
+        result = self._install("--no-start", env=env)
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("No compatible Python interpreter was found", result.stderr)
+        self.assertIn("--python /path/to/python3.11", result.stderr)
+        self.assertFalse(self.install_root.exists())
+
+    def test_matching_venv_package_error_names_selected_python(self) -> None:
+        no_venv = self._write_no_venv_python("python3.11-no-venv")
+        env = self.env.copy()
+        env["PYTHON_BIN"] = str(no_venv)
+
+        result = self._install("--no-start", env=env)
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("install the matching package", result.stderr)
+        self.assertIn("python3.11-venv", result.stderr)
+        self.assertFalse(self.install_root.exists())
+
     def test_install_upgrade_and_rollback_swap_immutable_releases(self) -> None:
         first = self._install("--no-start")
         self.assertEqual(first.returncode, 0, first.stderr)
@@ -222,6 +387,9 @@ os.execv("/usr/bin/install", ["install", *args])
         self.assertIn(f"WorkingDirectory={self.install_root}/current", agent_unit)
         self.assertIn(f"EnvironmentFile={self.etc_root}/arena-hero-agent.env", agent_unit)
         self.assertIn(f"EnvironmentFile=-{self.runtime_dir}/runtime.env", agent_unit)
+        self.assertIn("StartLimitIntervalSec=0", agent_unit)
+        self.assertIn("--stale-turn-timeout-seconds 90", agent_unit)
+        self.assertIn("LimitCORE=0", agent_unit)
         self.assertNotIn("WorkingDirectory=/opt/arena-hero-agent", agent_unit)
         self.assertNotIn("ExecStart=/opt/arena-hero-agent", agent_unit)
         installed_rollback = self.rollback_bin.read_text(encoding="utf-8")

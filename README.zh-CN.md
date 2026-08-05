@@ -56,6 +56,10 @@ chmod 600 .env
 sh scripts/run-agent.sh
 ```
 
+POSIX 初始化脚本会自动探测带版本号的 Python 3.11+。如果系统的 `python3`
+版本较旧，可使用
+`PYTHON_BIN="$(command -v python3.11)" sh scripts/bootstrap.sh` 显式指定。
+
 ### Docker Compose
 
 ```bash
@@ -82,6 +86,9 @@ ARENA_HERO_AGENT_IMAGE=ghcr.io/drew-z/arena-hero-agent:0.1.0 docker compose up -
 sudo sh scripts/install-systemd.sh
 sudo journalctl -fu arena-hero-agent.service -o short-iso-precise
 ```
+
+Ubuntu 22.04 默认是 Python 3.10。请安装系统级 Python 3.11+ 及匹配的
+`venv` 包，并通过 `--python` 指定；详见[部署文档](docs/deployment.md#linux-systemd-server)。
 
 安装器会隐藏输入 API key，在 `/opt/arena-hero-agent/releases` 下构建不可变
 版本并原子切换 `current` 链接，默认只启用主 Agent 和每六小时一次的版本兼容

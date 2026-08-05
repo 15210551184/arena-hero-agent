@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import argparse
 import heapq
+import math
 import os
 import socket
 import sys
+import threading
+import time
 from collections import Counter, deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -110,6 +113,7 @@ POLICY_EXIT_CODE = 11
 PROTOCOL_EXIT_CODE = 12
 API_EXIT_CODE = 13
 AGENT_EXIT_CODE = 14
+DEFAULT_STALE_TURN_TIMEOUT_SECONDS = 0.0
 TURN_SKIP_API_ERRORS = frozenset(
     {
         "COMMAND_RATE_LIMITED",
@@ -632,6 +636,7 @@ def _queue_move(
     *,
     allow_core_entry: bool = False,
     allow_friendly_entry: Position | None = None,
+    allow_single_friendly_transit: bool = False,
     avoid_danger: bool = True,
 ) -> bool:
     for direction in directions:
@@ -647,7 +652,14 @@ def _queue_move(
         if occupants:
             entering_core = allow_core_entry and destination == context.core_position
             entering_allowed_friendly = destination == allow_friendly_entry
-            if not (entering_core or entering_allowed_friendly) or occupants >= 2:
+            entering_single_friendly = (
+                allow_single_friendly_transit and occupants < 2
+            )
+            if not (
+                entering_core
+                or entering_allowed_friendly
+                or entering_single_friendly
+            ) or occupants >= 2:
                 continue
 
         unit.move(direction)
@@ -737,6 +749,7 @@ def _queue_core_defender_egress(
     turn: Turn,
     context: MovementContext,
     enemies: Sequence[object],
+    healing_holds: set[UUID] | None = None,
 ) -> set[UUID]:
     """Move a defender off the Core before Workers plan their deliveries."""
     core = turn.core
@@ -755,6 +768,29 @@ def _queue_core_defender_egress(
         return set()
 
     defender = defenders[0]
+    core_threats = _core_threatening_enemies(
+        core.position,
+        enemies,
+        context.obstacles,
+    )
+    can_counter_core_threat = any(
+        (
+            defender.unit_type is UnitType.VANGUARD
+            and _distance(defender.position, enemy.position) == 1
+        )
+        or (
+            defender.unit_type is UnitType.RANGER
+            and _ranger_can_shoot(
+                defender.position,
+                enemy.position,
+                context.obstacles,
+            )
+        )
+        for enemy in core_threats
+    )
+    if can_counter_core_threat:
+        return set()
+
     imminent_cargo = any(
         worker.cargo > 0
         and _distance(worker.position, core.position) <= CORE_SHORT_CARGO_ETA
@@ -762,8 +798,9 @@ def _queue_core_defender_egress(
     )
     missing_hp = _unit_max_hp(defender.unit_type) - defender.hp
     if (
-        missing_hp > 0
-        and not enemies
+        healing_holds is not None
+        and defender.id in healing_holds
+        and missing_hp > 0
         and not imminent_cargo
         and core.view.state is CoreState.NORMAL
         and core.hp == 5
@@ -783,7 +820,7 @@ def _queue_core_defender_egress(
             continue
         if destination in context.reserved_destinations:
             continue
-        if context.friendly_counts[destination] > 0:
+        if context.friendly_counts[destination] >= 2:
             continue
 
         enemy_distance = _minimum_enemy_distance(destination, enemies)
@@ -808,7 +845,12 @@ def _queue_core_defender_egress(
     directions = tuple(
         direction for _, direction in sorted(candidates, reverse=True)
     )
-    if not _queue_move(defender, directions, context):
+    if not _queue_move(
+        defender,
+        directions,
+        context,
+        allow_single_friendly_transit=True,
+    ):
         return set()
     return {defender.id}
 
@@ -849,9 +891,6 @@ def _queue_core_delivery_handoff(
     ):
         # Normal resource/scout routing clears a free lane without overriding
         # useful work. Coordination is needed only when all exits are occupied.
-        return set()
-
-    if turn.visible_enemies:
         return set()
 
     units_by_position = {
@@ -954,6 +993,7 @@ def _queue_toward(
     *,
     allow_core_entry: bool = False,
     allow_target_entry: bool = False,
+    allow_single_friendly_transit: bool = False,
     discouraged: set[Position] | None = None,
     avoid_danger: bool = True,
 ) -> bool:
@@ -973,7 +1013,10 @@ def _queue_toward(
             and occupants < 2
         )
         entering_target = allow_target_entry and cell == target and occupants < 2
-        if not entering_core and not entering_target:
+        entering_single_friendly = (
+            allow_single_friendly_transit and occupants < 2
+        )
+        if not entering_core and not entering_target and not entering_single_friendly:
             blocked.add(cell)
 
     combined_discouraged = set(context.discouraged_cells)
@@ -992,6 +1035,7 @@ def _queue_toward(
         context,
         allow_core_entry=allow_core_entry,
         allow_friendly_entry=target if allow_target_entry else None,
+        allow_single_friendly_transit=allow_single_friendly_transit,
         avoid_danger=avoid_danger,
     )
 
@@ -1089,6 +1133,27 @@ def _projected_core_damage(
         ):
             damage += 1
     return damage
+
+
+def _core_threatening_enemies(
+    core_position: Position,
+    enemies: Sequence[object],
+    obstacles: set[Position],
+) -> tuple[object, ...]:
+    threats = []
+    for enemy in enemies:
+        if getattr(enemy, "kind", None) == "CORE":
+            continue
+        if enemy.unit_type is UnitType.VANGUARD:
+            if _distance(core_position, enemy.position) == 1:
+                threats.append(enemy)
+        elif enemy.unit_type is UnitType.RANGER and _ranger_can_shoot(
+            enemy.position,
+            core_position,
+            obstacles,
+        ):
+            threats.append(enemy)
+    return tuple(threats)
 
 
 def _guard_post(
@@ -1198,6 +1263,7 @@ class CoreFarmer:
         self.enemy_unit_motion: dict[UUID, EnemyUnitMotion] = {}
         self.pursuing_enemy_ids: set[UUID] = set()
         self.combat_pressure_active = False
+        self.healing_defender_ids: set[UUID] = set()
         self.stationary_core_memory: dict[UUID, EnemyCoreSighting] = {}
         self.isolated_core_target_id: UUID | None = None
         self.core_observer_candidates: dict[UUID, UUID] = {}
@@ -1313,6 +1379,92 @@ class CoreFarmer:
             and _distance(turn.core.position, enemy.position)
             <= CORE_EVADE_TRIGGER_DISTANCE
             for enemy in turn.visible_enemies
+        )
+
+    @staticmethod
+    def _has_imminent_cargo(turn: Turn) -> bool:
+        if turn.core is None:
+            return False
+        return any(
+            worker.cargo > 0
+            and _distance(worker.position, turn.core.position) <= CORE_SHORT_CARGO_ETA
+            for worker in turn.workers
+        )
+
+    def _refresh_healing_defenders(
+        self,
+        turn: Turn,
+        combat_target: object | None,
+    ) -> None:
+        core = turn.core
+        defenders = (*turn.vanguards, *turn.rangers)
+        defender_ids = {defender.id for defender in defenders}
+        self.healing_defender_ids.intersection_update(defender_ids)
+        for defender in defenders:
+            if defender.hp >= _unit_max_hp(defender.unit_type):
+                self.healing_defender_ids.discard(defender.id)
+        if core is None:
+            self.healing_defender_ids.clear()
+            return
+        defenders_by_id = {defender.id: defender for defender in defenders}
+        for defender_id in tuple(self.healing_defender_ids):
+            defender = defenders_by_id[defender_id]
+            same_type_guard_remains = any(
+                other.id != defender_id
+                and other.unit_type is defender.unit_type
+                for other in defenders
+            )
+            if defender.position != core.position and not same_type_guard_remains:
+                self.healing_defender_ids.discard(defender_id)
+
+        if self.healing_defender_ids:
+            return
+        if (
+            combat_target is not None
+            or self.combat_pressure_active
+            or core.view.state is not CoreState.NORMAL
+            or core.hp < 5
+            or self._has_imminent_cargo(turn)
+        ):
+            return
+
+        candidates = []
+        for defender in defenders:
+            max_hp = _unit_max_hp(defender.unit_type)
+            missing_hp = max_hp - defender.hp
+            same_type = [
+                unit for unit in defenders if unit.unit_type is defender.unit_type
+            ]
+            if missing_hp <= 0:
+                continue
+            if defender.position != core.position and len(same_type) <= 1:
+                continue
+            if turn.resources < UNIT_HEAL_RESOURCE_RESERVE + missing_hp:
+                continue
+            candidates.append(
+                (
+                    int(defender.position != core.position),
+                    defender.hp / max_hp,
+                    _distance(defender.position, core.position),
+                    _uuid_sort_key(defender),
+                    defender,
+                )
+            )
+        if candidates:
+            self.healing_defender_ids.add(min(candidates)[4].id)
+
+    def _healing_return_ready(self, turn: Turn, defender: object) -> bool:
+        core = turn.core
+        if core is None or defender.id not in self.healing_defender_ids:
+            return False
+        missing_hp = _unit_max_hp(defender.unit_type) - defender.hp
+        return (
+            missing_hp > 0
+            and not self.combat_pressure_active
+            and core.view.state is CoreState.NORMAL
+            and core.hp == 5
+            and turn.resources >= UNIT_HEAL_RESOURCE_RESERVE + missing_hp
+            and not self._has_imminent_cargo(turn)
         )
 
     @staticmethod
@@ -2327,6 +2479,12 @@ class CoreFarmer:
             )
         )
         empty_workers = [worker for worker in workers if worker.cargo == 0]
+        self._refresh_healing_defenders(turn, combat_target)
+        healing_holds = {
+            defender.id
+            for defender in (*turn.vanguards, *turn.rangers)
+            if self._healing_return_ready(turn, defender)
+        }
         observer_id = (
             self.core_raid_spotter_id
             if observer_position is not None
@@ -2339,6 +2497,7 @@ class CoreFarmer:
             turn,
             context,
             mobile_enemies,
+            healing_holds,
         )
         preplanned_units.update(_queue_core_delivery_handoff(turn, context))
         context.preplanned_units = preplanned_units
@@ -2456,6 +2615,7 @@ class CoreFarmer:
                 core.position,
                 context,
                 allow_core_entry=True,
+                allow_single_friendly_transit=True,
             )
             if not moved:
                 worker.wait()
@@ -2567,25 +2727,41 @@ class CoreFarmer:
         avoidance_enemies = tuple(
             enemy for enemy in enemies if enemy.id != target_id
         )
+        core_threats = _core_threatening_enemies(
+            core.position,
+            enemies,
+            context.obstacles,
+        )
         strike_vanguards, _ = self._strike_group_ids(turn, isolated_core_target)
         for index, vanguard in enumerate(
             sorted(turn.vanguards, key=_uuid_sort_key)
         ):
             if context.preplanned_units and vanguard.id in context.preplanned_units:
                 continue
-            if (
-                isolated_core_target is None
-                and not enemies
-                and core.view.state is CoreState.NORMAL
-                and vanguard.position == core.position
-                and vanguard.hp < _unit_max_hp(vanguard.unit_type)
-                and core.hp == 5
-                and turn.resources
-                >= UNIT_HEAL_RESOURCE_RESERVE
-                + _unit_max_hp(vanguard.unit_type)
-                - vanguard.hp
-            ):
-                vanguard.heal()
+            immediate_core_threats = [
+                enemy
+                for enemy in core_threats
+                if _distance(vanguard.position, core.position)
+                <= CORE_PROTECTOR_RADIUS
+                and _distance(vanguard.position, enemy.position) == 1
+            ]
+            if immediate_core_threats:
+                target = min(immediate_core_threats, key=_uuid_sort_key)
+                direction = _direction_to_adjacent(vanguard.position, target.position)
+                if direction is not None:
+                    vanguard.sweep(direction)
+                    continue
+            if self._healing_return_ready(turn, vanguard):
+                if vanguard.position == core.position:
+                    vanguard.heal()
+                elif not _queue_toward(
+                    vanguard,
+                    core.position,
+                    context,
+                    allow_core_entry=True,
+                    allow_single_friendly_transit=True,
+                ):
+                    vanguard.wait()
                 continue
             pursuing_adjacent = [
                 enemy
@@ -2690,25 +2866,49 @@ class CoreFarmer:
         avoidance_enemies = tuple(
             enemy for enemy in enemies if enemy.id != target_id
         )
+        core_threats = _core_threatening_enemies(
+            core.position,
+            enemies,
+            context.obstacles,
+        )
         _, strike_rangers = self._strike_group_ids(turn, isolated_core_target)
         for index, ranger in enumerate(
             sorted(turn.rangers, key=_uuid_sort_key)
         ):
             if context.preplanned_units and ranger.id in context.preplanned_units:
                 continue
-            if (
-                isolated_core_target is None
-                and not enemies
-                and core.view.state is CoreState.NORMAL
-                and ranger.position == core.position
-                and ranger.hp < _unit_max_hp(ranger.unit_type)
-                and core.hp == 5
-                and turn.resources
-                >= UNIT_HEAL_RESOURCE_RESERVE
-                + _unit_max_hp(ranger.unit_type)
-                - ranger.hp
-            ):
-                ranger.heal()
+            immediate_core_threats = [
+                enemy
+                for enemy in core_threats
+                if _distance(ranger.position, core.position)
+                <= CORE_PROTECTOR_RADIUS
+                and _ranger_can_shoot(
+                    ranger.position,
+                    enemy.position,
+                    context.obstacles,
+                )
+            ]
+            if immediate_core_threats:
+                target = min(
+                    immediate_core_threats,
+                    key=lambda enemy: (
+                        _ranger_line_range(ranger.position, enemy.position),
+                        _uuid_sort_key(enemy),
+                    ),
+                )
+                ranger.shoot(target)
+                continue
+            if self._healing_return_ready(turn, ranger):
+                if ranger.position == core.position:
+                    ranger.heal()
+                elif not _queue_toward(
+                    ranger,
+                    core.position,
+                    context,
+                    allow_core_entry=True,
+                    allow_single_friendly_transit=True,
+                ):
+                    ranger.wait()
                 continue
             pursuing_targets = [
                 enemy
@@ -3546,6 +3746,7 @@ def _position_diagnostics(turn: Turn, tactic: CoreFarmer) -> str:
         f"clear_unit_target={str(tactic.stationary_unit_target_id)[:8] if tactic.stationary_unit_target_id else 'none'} "
         f"pursuing_enemies={len(tactic.pursuing_enemy_ids)} "
         f"combat_pressure={int(tactic.combat_pressure_active)} "
+        f"healing_defenders={len(tactic.healing_defender_ids)} "
         f"compatibility_hold={int(tactic.compatibility_hold)} "
         f"threat_caution_until={tactic.threat_caution_until_tick} "
         f"core_cancel_reason={tactic.last_core_cancel_reason} "
@@ -3633,6 +3834,53 @@ def _should_log_turn(turn: Turn) -> bool:
     )
 
 
+class _AcceptedTurnWatchdog:
+    def __init__(self, game: ArenaHeroClient, timeout_seconds: float) -> None:
+        self.game = game
+        self.timeout_seconds = timeout_seconds
+        self.stop_event = threading.Event()
+        self.timed_out = threading.Event()
+        self.lock = threading.Lock()
+        self.last_accepted_at = time.monotonic()
+        self.thread: threading.Thread | None = None
+
+    def __enter__(self) -> _AcceptedTurnWatchdog:
+        if self.timeout_seconds > 0:
+            self.thread = threading.Thread(
+                target=self._run,
+                name="arena-accepted-turn-watchdog",
+                daemon=True,
+            )
+            self.thread.start()
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.stop_event.set()
+        if self.thread is not None:
+            self.thread.join(timeout=1.0)
+
+    def mark_accepted(self) -> None:
+        with self.lock:
+            self.last_accepted_at = time.monotonic()
+
+    def _run(self) -> None:
+        poll_interval = min(1.0, max(0.05, self.timeout_seconds / 4))
+        while not self.stop_event.wait(poll_interval):
+            with self.lock:
+                elapsed = time.monotonic() - self.last_accepted_at
+            if elapsed < self.timeout_seconds:
+                continue
+            self.timed_out.set()
+            print(
+                "WARNING no accepted Turn received within "
+                f"{self.timeout_seconds:g}s; restarting the Agent",
+                file=sys.stderr,
+                flush=True,
+            )
+            self.game.close()
+            return
+
+
 def play(
     api_key: str,
     *,
@@ -3641,7 +3889,13 @@ def play(
     beacon_policy: str,
     compatibility_marker: Path | None = DEFAULT_COMPATIBILITY_MARKER,
     heartbeat_file: Path | None = None,
+    stale_turn_timeout_seconds: float = DEFAULT_STALE_TURN_TIMEOUT_SECONDS,
 ) -> None:
+    if (
+        not math.isfinite(stale_turn_timeout_seconds)
+        or stale_turn_timeout_seconds < 0
+    ):
+        raise ValueError("stale Turn timeout must be finite and zero or positive")
     tactic = CoreFarmer(
         worker_target=worker_target,
         beacon_policy=beacon_policy,
@@ -3650,68 +3904,75 @@ def play(
     last_accepted_tick: int | None = None
     resource_ledger_snapshot: ResourceLedgerSnapshot | None = None
     with ArenaHeroClient(api_key=api_key, base_url=base_url) as game:
-        for event in game.events():
-            if isinstance(event, Received):
-                if warning := _manual_override_summary(event):
-                    print(warning, file=sys.stderr, flush=True)
-                continue
-            if not isinstance(event, Turn):
-                continue
-            turn = event
-            if last_accepted_tick is not None and turn.tick <= last_accepted_tick:
-                print(
-                    f"WARNING tick={turn.tick} duplicate_turn_ignored",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                continue
-            if resource_ledger_snapshot is not None:
-                _emit_resource_ledger(
-                    _reconcile_resource_turn(resource_ledger_snapshot, turn)
-                )
-            tactic.choose_actions(turn)
-            try:
-                accepted = turn.submit()
-            except APIError as exc:
-                if _is_turn_scoped_api_error(exc.error):
+        watchdog = _AcceptedTurnWatchdog(game, stale_turn_timeout_seconds)
+        with watchdog:
+            for event in game.events():
+                if isinstance(event, Received):
+                    if warning := _manual_override_summary(event):
+                        print(warning, file=sys.stderr, flush=True)
+                    continue
+                if not isinstance(event, Turn):
+                    continue
+                turn = event
+                if last_accepted_tick is not None and turn.tick <= last_accepted_tick:
                     print(
-                        f"WARNING tick={turn.tick} plan_skipped error={exc.error}",
+                        f"WARNING tick={turn.tick} duplicate_turn_ignored",
                         file=sys.stderr,
                         flush=True,
                     )
                     continue
-                raise
-            last_accepted_tick = accepted.tick
-            resource_ledger_snapshot = _resource_ledger_snapshot(turn)
-            _notify_systemd(
-                "WATCHDOG=1",
-                _systemd_status(turn, tactic, accepted.tick),
+                if resource_ledger_snapshot is not None:
+                    _emit_resource_ledger(
+                        _reconcile_resource_turn(resource_ledger_snapshot, turn)
+                    )
+                tactic.choose_actions(turn)
+                try:
+                    accepted = turn.submit()
+                except APIError as exc:
+                    if _is_turn_scoped_api_error(exc.error):
+                        print(
+                            f"WARNING tick={turn.tick} plan_skipped error={exc.error}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        continue
+                    raise
+                last_accepted_tick = accepted.tick
+                watchdog.mark_accepted()
+                resource_ledger_snapshot = _resource_ledger_snapshot(turn)
+                _notify_systemd(
+                    "WATCHDOG=1",
+                    _systemd_status(turn, tactic, accepted.tick),
+                )
+                if heartbeat_file is not None:
+                    write_heartbeat(
+                        heartbeat_file,
+                        tick=accepted.tick,
+                        resources=turn.resources,
+                        population=len(turn.units),
+                        core_alive=turn.core is not None,
+                    )
+                if _should_log_turn(turn):
+                    actions, events = _turn_diagnostics(turn)
+                    print(
+                        f"tick={accepted.tick} accepted={accepted.accepted} "
+                        f"resources={turn.resources}/{turn.resource_capacity} "
+                        f"workers={len(turn.workers)} vanguards={len(turn.vanguards)} "
+                        f"rangers={len(turn.rangers)} cargo={sum(worker.cargo for worker in turn.workers)} "
+                        f"visible_resources={len(turn.resource_cells)} actions={actions} events={events} "
+                        f"recovery={int(tactic.recovery_mode)} phase={tactic.strategy_phase(turn)} "
+                        f"worker_target={tactic.worker_target} "
+                        f"beacon_policy={tactic.beacon_policy} "
+                        f"tuning_generation={os.environ.get('ARENA_TUNING_GENERATION', '0').strip() or '0'} "
+                        f"core_hp={turn.core.hp if turn.core else 'none'} "
+                        f"core_shield={turn.core.shield if turn.core else 'none'} "
+                        f"{_position_diagnostics(turn, tactic)}",
+                        flush=True,
+                    )
+        if watchdog.timed_out.is_set():
+            raise OSError(
+                "no accepted Turn received before the unattended recovery timeout"
             )
-            if heartbeat_file is not None:
-                write_heartbeat(
-                    heartbeat_file,
-                    tick=accepted.tick,
-                    resources=turn.resources,
-                    population=len(turn.units),
-                    core_alive=turn.core is not None,
-                )
-            if _should_log_turn(turn):
-                actions, events = _turn_diagnostics(turn)
-                print(
-                    f"tick={accepted.tick} accepted={accepted.accepted} "
-                    f"resources={turn.resources}/{turn.resource_capacity} "
-                    f"workers={len(turn.workers)} vanguards={len(turn.vanguards)} "
-                    f"rangers={len(turn.rangers)} cargo={sum(worker.cargo for worker in turn.workers)} "
-                    f"visible_resources={len(turn.resource_cells)} actions={actions} events={events} "
-                    f"recovery={int(tactic.recovery_mode)} phase={tactic.strategy_phase(turn)} "
-                    f"worker_target={tactic.worker_target} "
-                    f"beacon_policy={tactic.beacon_policy} "
-                    f"tuning_generation={os.environ.get('ARENA_TUNING_GENERATION', '0').strip() or '0'} "
-                    f"core_hp={turn.core.hp if turn.core else 'none'} "
-                    f"core_shield={turn.core.shield if turn.core else 'none'} "
-                    f"{_position_diagnostics(turn, tactic)}",
-                    flush=True,
-                )
     raise OSError("Arena Hero event stream ended unexpectedly")
 
 
@@ -3744,6 +4005,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Atomically write liveness metadata after every accepted Turn.",
     )
+    parser.add_argument(
+        "--stale-turn-timeout-seconds",
+        type=float,
+        default=DEFAULT_STALE_TURN_TIMEOUT_SECONDS,
+        help="Exit transiently after this many seconds without an accepted Turn (0 disables).",
+    )
     return parser
 
 
@@ -3762,7 +4029,9 @@ def main(argv: list[str] | None = None) -> int:
             beacon_policy=args.beacon_policy,
             compatibility_marker=args.compatibility_marker,
             heartbeat_file=args.heartbeat_file,
+            stale_turn_timeout_seconds=args.stale_turn_timeout_seconds,
         )
+
     except KeyboardInterrupt:
         print("Arena Hero agent stopped.", file=sys.stderr)
         return 130

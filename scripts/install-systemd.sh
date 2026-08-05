@@ -14,7 +14,7 @@ SUPERVISOR_ENV=${ARENA_SUPERVISOR_ENV:-/etc/arena-hero-supervisor.env}
 SYSTEMD_UNIT_DIR=${ARENA_SYSTEMD_UNIT_DIR:-/etc/systemd/system}
 ROLLBACK_BIN=${ARENA_ROLLBACK_BIN:-/usr/local/sbin/arena-hero-rollback}
 SYSTEMCTL_BIN=${ARENA_SYSTEMCTL_BIN:-systemctl}
-PYTHON_BIN=${PYTHON_BIN:-python3}
+PYTHON_BIN=${PYTHON_BIN:-}
 HEALTH_ATTEMPTS=${ARENA_HEALTH_ATTEMPTS:-12}
 HEALTH_INTERVAL=${ARENA_HEALTH_INTERVAL:-10}
 WITH_SUPERVISOR=0
@@ -48,7 +48,7 @@ Options:
   --without-ai          Remove the private AI config; keep deterministic reports.
   --without-optimizer   Disable the optimizer timer and stop an active run.
   --no-start            Activate the release without enabling, starting, or checking services.
-  --python PATH         Python 3.11+ interpreter (default: python3).
+  --python PATH         Explicit Python 3.11+ interpreter (default: auto-detect).
   -h, --help            Show this help.
 EOF
 }
@@ -127,6 +127,36 @@ require_command() {
     fi
 }
 
+python_version_supported() {
+    "$1" -c 'import sys; raise SystemExit(sys.version_info < (3, 11))' \
+        >/dev/null 2>&1
+}
+
+select_python() {
+    if [ -n "$PYTHON_BIN" ]; then
+        if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+            echo "Selected Python interpreter is unavailable: $PYTHON_BIN" >&2
+            exit 2
+        fi
+        if ! python_version_supported "$PYTHON_BIN"; then
+            echo "Selected Python interpreter must be Python 3.11 or newer: $PYTHON_BIN" >&2
+            exit 2
+        fi
+        PYTHON_BIN=$(command -v "$PYTHON_BIN")
+        return
+    fi
+
+    for candidate in python3 python3.13 python3.12 python3.11; do
+        if command -v "$candidate" >/dev/null 2>&1 && python_version_supported "$candidate"; then
+            PYTHON_BIN=$(command -v "$candidate")
+            return
+        fi
+    done
+
+    echo "No compatible Python interpreter was found. Install Python 3.11+ or pass --python /path/to/python3.11." >&2
+    exit 2
+}
+
 for command_name in basename cat chmod chown date dirname flock grep id install ln mktemp mv readlink rm sed sleep tr useradd; do
     require_command "$command_name"
 done
@@ -135,7 +165,7 @@ if [ "$WITH_SUPERVISOR" -eq 1 ]; then
     require_command usermod
 fi
 require_command "$SYSTEMCTL_BIN"
-require_command "$PYTHON_BIN"
+select_python
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "Run this installer as root (for example, with sudo)." >&2
@@ -180,12 +210,8 @@ do
     fi
 done
 
-"$PYTHON_BIN" -c 'import sys; raise SystemExit(sys.version_info < (3, 11))' || {
-    echo "Python 3.11 or newer is required." >&2
-    exit 2
-}
 "$PYTHON_BIN" -c 'import tempfile, venv; root = tempfile.TemporaryDirectory(); venv.EnvBuilder(with_pip=True).create(root.name)' || {
-    echo "Python venv with pip is required (for example, install python3-venv on Debian/Ubuntu)." >&2
+    echo "The selected Python requires venv with pip (Ubuntu/Debian: install the matching package, for example python3.11-venv)." >&2
     exit 2
 }
 

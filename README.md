@@ -68,6 +68,10 @@ chmod 600 .env
 sh scripts/run-agent.sh
 ```
 
+The POSIX bootstrap auto-detects versioned Python 3.11+ commands. On systems
+whose `python3` is older, you can force one with
+`PYTHON_BIN="$(command -v python3.11)" sh scripts/bootstrap.sh`.
+
 ### Docker Compose
 
 ```bash
@@ -94,6 +98,10 @@ From a checked-out release on the server:
 sudo sh scripts/install-systemd.sh
 sudo journalctl -fu arena-hero-agent.service -o short-iso-precise
 ```
+
+Ubuntu 22.04 uses Python 3.10 by default. Install a system-wide Python 3.11+
+with its matching `venv` package and pass it with `--python`; see the
+[deployment guide](docs/deployment.md#linux-systemd-server).
 
 The installer prompts for the Arena Hero key without echoing it, builds an
 immutable release under `/opt/arena-hero-agent/releases`, atomically updates the
