@@ -76,9 +76,15 @@ STATIC_WORKER_CLEAR_RANGERS = 2
 CORE_PROTECTOR_RADIUS = 5
 UNIT_HEAL_RESOURCE_RESERVE = 10
 POST_THREAT_CAUTION_TICKS = 8
+RECENT_ATTACK_MEMORY_TICKS = 6
 PURSUIT_MEMORY_TTL = 2
 PURSUIT_SCORE_MAX = 4
 DISTANT_PURSUIT_SCORE_THRESHOLD = 3
+ACTIVE_ENEMY_ALERT_TICKS = 2
+CORE_PREEMPTIVE_EVADE_HORIZON_TICKS = 16
+SQUAD_DISENGAGE_TICKS = 8
+SCOUT_SAFE_RETURN_RADIUS = 3
+SCOUT_COOLDOWN_TICKS = 3
 STATIONARY_CORE_MEMORY_TTL = 256
 RESOURCE_MEMORY_TTL = 64
 RESOURCE_STALL_TICKS = 6
@@ -228,6 +234,17 @@ class EnemyUnitMotion:
     unit_type: UnitType
     pursuit_score: int = 0
     pursuit_ticks: int = 0
+    activity_until_tick: int = 0
+    preemptive_evade_until_tick: int = 0
+    ticks_to_attack_range: int | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class RememberedThreat:
+    id: UUID
+    position: Position
+    unit_type: UnitType
+    expires_tick: int
 
 
 @dataclass(slots=True, frozen=True)
@@ -408,54 +425,77 @@ def _minimum_enemy_distance(
     )
 
 
+def _enemy_distance_vector(
+    position: Position,
+    enemies: Sequence[object],
+) -> tuple[int, ...]:
+    return tuple(sorted(_distance(position, enemy.position) for enemy in enemies))
+
+
+def _position_threat_key(
+    position: Position,
+    enemies: Sequence[object],
+    obstacles: set[Position],
+) -> tuple[int, tuple[int, ...]]:
+    distances = _enemy_distance_vector(position, enemies)
+    return (
+        _projected_core_damage(position, enemies, obstacles),
+        tuple(-distance for distance in distances),
+    )
+
+
 def _retreat_direction(
     position: Position,
     beacon_position: Position,
     enemies: Sequence[object],
+    obstacles: set[Position],
     blocked: set[Position],
     previous_direction: Direction | None,
     *,
     allow_beacon_approach: bool,
 ) -> Direction | None:
     current_beacon_distance = _distance(position, beacon_position)
-    current_enemy_distance = _minimum_enemy_distance(position, enemies)
     away_vector = (
         position[0] - beacon_position[0],
         position[1] - beacon_position[1],
     )
-    candidates: list[tuple[tuple[int, ...], Direction]] = []
+    candidates: list[tuple[tuple[object, ...], Direction]] = []
     for index, direction in enumerate(CARDINAL_DIRECTIONS):
         destination = _destination(position, direction)
         if destination in blocked or not _is_signed_int64_position(destination):
             continue
         beacon_distance = _distance(destination, beacon_position)
-        enemy_distance = _minimum_enemy_distance(destination, enemies)
         if beacon_distance < current_beacon_distance and not allow_beacon_approach:
-            continue
-        if enemies and enemy_distance <= current_enemy_distance:
             continue
         dx, dy = direction.delta
         alignment = dx * away_vector[0] + dy * away_vector[1]
         continuity = int(direction is previous_direction)
         if enemies:
             score = (
-                enemy_distance,
-                beacon_distance,
-                alignment,
-                continuity,
-                -index,
+                *_position_threat_key(destination, enemies, obstacles),
+                -beacon_distance,
+                -alignment,
+                -continuity,
+                index,
             )
         else:
             score = (
-                beacon_distance,
-                alignment,
-                continuity,
-                -index,
+                -beacon_distance,
+                -alignment,
+                -continuity,
+                index,
             )
         candidates.append((score, direction))
     if not candidates:
         return None
-    return max(candidates, key=lambda candidate: candidate[0])[1]
+    best_score, best_direction = min(candidates, key=lambda candidate: candidate[0])
+    if (
+        enemies
+        and best_score[0]
+        > _projected_core_damage(position, enemies, obstacles)
+    ):
+        return None
+    return best_direction
 
 
 def _directions_toward(start: Position, target: Position) -> tuple[Direction, ...]:
@@ -691,7 +731,7 @@ def _queue_away_from_enemies(
             for direction in CARDINAL_DIRECTIONS
         }
 
-    candidates: list[tuple[tuple[int, int, int], Direction]] = []
+    candidates: list[tuple[tuple[object, ...], Direction]] = []
     for index, direction in enumerate(CARDINAL_DIRECTIONS):
         destination = _destination(unit.position, direction)
         if (
@@ -699,25 +739,24 @@ def _queue_away_from_enemies(
             and unit.position != context.core_position
         ):
             continue
-        enemy_distance = _minimum_enemy_distance(destination, enemies)
-        if enemy_distance <= current_enemy_distance:
-            continue
         candidates.append(
             (
                 (
-                    enemy_distance,
-                    _distance(destination, beacon_position),
-                    -index,
+                    *_position_threat_key(
+                        destination,
+                        enemies,
+                        context.obstacles,
+                    ),
+                    -_distance(destination, beacon_position),
+                    index,
                 ),
                 direction,
             )
         )
 
     directions = tuple(
-        direction for _, direction in sorted(candidates, reverse=True)
+        direction for _, direction in sorted(candidates)
     )
-    if _queue_move(unit, directions, context):
-        return True
     return _queue_move(
         unit,
         directions,
@@ -1187,6 +1226,80 @@ def _guard_post(
     return unit.position
 
 
+def _combat_target_key(origin: Position, enemy: object) -> tuple[object, ...]:
+    unit_type = getattr(enemy, "unit_type", None)
+    type_priority = (
+        0
+        if unit_type is UnitType.RANGER
+        else 1
+        if unit_type is UnitType.VANGUARD
+        else 2
+        if unit_type is UnitType.WORKER
+        else 3
+    )
+    return (
+        type_priority,
+        getattr(enemy, "hp", 5),
+        _distance(origin, enemy.position),
+        _uuid_sort_key(enemy),
+    )
+
+
+def _defense_post_directions(
+    core_position: Position,
+    enemies: Sequence[object],
+    fallback: Sequence[Direction],
+    *,
+    defender_index: int = 0,
+    priority_ids: set[UUID] | None = None,
+) -> tuple[Direction, ...]:
+    combat_enemies = tuple(
+        enemy
+        for enemy in enemies
+        if getattr(enemy, "kind", None) != "CORE"
+        and getattr(enemy, "unit_type", None)
+        in {UnitType.VANGUARD, UnitType.RANGER}
+    )
+    if not combat_enemies:
+        return tuple(fallback)
+    priority_ids = priority_ids or set()
+    axis_enemies: dict[Direction, object] = {}
+    for enemy in combat_enemies:
+        axis = _directions_toward(core_position, enemy.position)[0]
+        current = axis_enemies.get(axis)
+        if current is None or (
+            int(enemy.id not in priority_ids),
+            _distance(core_position, enemy.position),
+            _combat_target_key(core_position, enemy),
+        ) < (
+            int(current.id not in priority_ids),
+            _distance(core_position, current.position),
+            _combat_target_key(core_position, current),
+        ):
+            axis_enemies[axis] = enemy
+    ordered_axes = tuple(
+        axis
+        for axis, _ in sorted(
+            axis_enemies.items(),
+            key=lambda item: (
+                int(item[1].id not in priority_ids),
+                _distance(core_position, item[1].position),
+                _combat_target_key(core_position, item[1]),
+                CARDINAL_DIRECTIONS.index(item[0]),
+            ),
+        )
+    )
+    primary = ordered_axes[defender_index % len(ordered_axes)]
+    return (primary,) + tuple(
+        direction
+        for direction in _directions_toward(
+            core_position,
+            axis_enemies[primary].position,
+        )
+        if direction is not primary
+    )
+
+
 def _worker_expansion_threshold(
     worker_count: int,
     worker_target: int,
@@ -1261,8 +1374,17 @@ class CoreFarmer:
         self.enemy_core_sightings: dict[UUID, EnemyCoreSighting] = {}
         self.enemy_unit_sightings: dict[UUID, EnemyCoreSighting] = {}
         self.enemy_unit_motion: dict[UUID, EnemyUnitMotion] = {}
+        self.active_enemy_ids: set[UUID] = set()
+        self.preemptive_evade_enemy_ids: set[UUID] = set()
         self.pursuing_enemy_ids: set[UUID] = set()
+        self.recent_attack_until_tick = 0
+        self.recent_core_attack_until_tick = 0
+        self.recent_attack_threats: dict[UUID, RememberedThreat] = {}
         self.combat_pressure_active = False
+        self.squad_return_ids: set[UUID] = set()
+        self.scout_return_ids: set[UUID] = set()
+        self.scout_cooldown_until: dict[UUID, int] = {}
+        self.squad_disengage_until_tick = 0
         self.healing_defender_ids: set[UUID] = set()
         self.stationary_core_memory: dict[UUID, EnemyCoreSighting] = {}
         self.isolated_core_target_id: UUID | None = None
@@ -1373,12 +1495,53 @@ class CoreFarmer:
     def _under_combat_pressure(self, turn: Turn) -> bool:
         if turn.core is None:
             return False
-        return bool(self.pursuing_enemy_ids) or any(
-            getattr(enemy, "kind") != "CORE"
-            and enemy.unit_type in {UnitType.VANGUARD, UnitType.RANGER}
-            and _distance(turn.core.position, enemy.position)
-            <= CORE_EVADE_TRIGGER_DISTANCE
-            for enemy in turn.visible_enemies
+        return (
+            turn.tick <= self.recent_attack_until_tick
+            or turn.tick <= self.squad_disengage_until_tick
+            or bool(self.active_enemy_ids)
+            or bool(self.pursuing_enemy_ids)
+            or any(
+                getattr(enemy, "kind") != "CORE"
+                and enemy.unit_type in {UnitType.VANGUARD, UnitType.RANGER}
+                and _distance(turn.core.position, enemy.position)
+                <= CORE_EVADE_TRIGGER_DISTANCE
+                for enemy in turn.visible_enemies
+            )
+        )
+
+    def _remembered_retreat_threats(
+        self,
+        turn: Turn,
+        visible_enemies: Sequence[object],
+    ) -> tuple[RememberedThreat, ...]:
+        visible_ids = {enemy.id for enemy in visible_enemies}
+        remembered = {
+            threat.id: threat
+            for threat in self.recent_attack_threats.values()
+            if threat.id not in visible_ids and threat.expires_tick >= turn.tick
+        }
+        tracked_ids = (
+            self.active_enemy_ids
+            | self.preemptive_evade_enemy_ids
+            | self.pursuing_enemy_ids
+        )
+        for unit_id in tracked_ids - visible_ids - set(remembered):
+            motion = self.enemy_unit_motion.get(unit_id)
+            if motion is None:
+                continue
+            remembered[unit_id] = RememberedThreat(
+                id=unit_id,
+                position=motion.position,
+                unit_type=motion.unit_type,
+                expires_tick=max(
+                    motion.activity_until_tick,
+                    motion.preemptive_evade_until_tick,
+                    turn.tick,
+                ),
+            )
+        return tuple(
+            threat
+            for threat in remembered.values()
         )
 
     @staticmethod
@@ -1474,6 +1637,85 @@ class CoreFarmer:
             or motion.pursuit_score >= DISTANT_PURSUIT_SCORE_THRESHOLD
         )
 
+    @staticmethod
+    def _attack_range(unit_type: UnitType) -> int:
+        return 3 if unit_type is UnitType.RANGER else 1
+
+    def _attack_event_threats(
+        self,
+        event: object,
+        visible_units: Mapping[UUID, object],
+        prior_motion: Mapping[UUID, EnemyUnitMotion],
+    ) -> tuple[tuple[UUID, Position, UnitType], ...]:
+        actor_id = getattr(event, "actor_id", None)
+        if actor_id is not None:
+            visible_actor = visible_units.get(actor_id)
+            if (
+                visible_actor is not None
+                and visible_actor.unit_type in {UnitType.VANGUARD, UnitType.RANGER}
+            ):
+                return ((actor_id, visible_actor.position, visible_actor.unit_type),)
+            remembered_actor = prior_motion.get(actor_id)
+            if (
+                remembered_actor is not None
+                and remembered_actor.unit_type
+                in {UnitType.VANGUARD, UnitType.RANGER}
+            ):
+                return (
+                    (
+                        actor_id,
+                        remembered_actor.position,
+                        remembered_actor.unit_type,
+                    ),
+                )
+
+        target_position = getattr(event, "position", None)
+        candidates: dict[UUID, tuple[UUID, Position, UnitType]] = {}
+        for unit_id, motion in prior_motion.items():
+            if motion.unit_type not in {UnitType.VANGUARD, UnitType.RANGER}:
+                continue
+            can_attack = target_position is None or (
+                motion.unit_type is UnitType.VANGUARD
+                and _distance(motion.position, target_position) == 1
+            ) or (
+                motion.unit_type is UnitType.RANGER
+                and _ranger_can_shoot(
+                    motion.position,
+                    target_position,
+                    self.known_obstacles,
+                )
+            )
+            if can_attack:
+                candidates[unit_id] = (
+                    unit_id,
+                    motion.position,
+                    motion.unit_type,
+                )
+        if candidates:
+            return tuple(candidates.values())
+
+        for unit_id, enemy_unit in visible_units.items():
+            if enemy_unit.unit_type not in {UnitType.VANGUARD, UnitType.RANGER}:
+                continue
+            can_attack = target_position is None or (
+                enemy_unit.unit_type is UnitType.VANGUARD
+                and _distance(enemy_unit.position, target_position) == 1
+            ) or (
+                enemy_unit.unit_type is UnitType.RANGER
+                and _ranger_can_shoot(
+                    enemy_unit.position,
+                    target_position,
+                    self.known_obstacles,
+                )
+            )
+            if can_attack:
+                candidates[unit_id] = (
+                    unit_id,
+                    enemy_unit.position,
+                    enemy_unit.unit_type,
+                )
+        return tuple(candidates.values())
+
     def _update_enemy_awareness(self, turn: Turn) -> None:
         visible_cores = {
             enemy.id: enemy
@@ -1485,6 +1727,7 @@ class CoreFarmer:
             for enemy in turn.visible_enemies
             if getattr(enemy, "kind") != "CORE"
         }
+        prior_motion = dict(self.enemy_unit_motion)
         if (
             self.core_observer_target_id is not None
             and self.core_observer_target_id not in visible_cores
@@ -1508,13 +1751,32 @@ class CoreFarmer:
         hidden_unit_ids = set(self.enemy_unit_sightings) - set(visible_units)
         for unit_id in hidden_unit_ids:
             self.enemy_unit_sightings.pop(unit_id, None)
+        self.active_enemy_ids.clear()
+        self.preemptive_evade_enemy_ids.clear()
         self.pursuing_enemy_ids.clear()
         for unit_id in set(self.enemy_unit_motion) - set(visible_units):
             motion = self.enemy_unit_motion[unit_id]
-            if turn.tick - motion.last_tick >= PURSUIT_MEMORY_TTL:
+            hidden_ticks = turn.tick - motion.last_tick
+            if (
+                hidden_ticks >= PURSUIT_MEMORY_TTL
+                and turn.tick > motion.activity_until_tick
+                and turn.tick > motion.preemptive_evade_until_tick
+            ):
                 self.enemy_unit_motion.pop(unit_id, None)
-            elif (
-                motion.unit_type in {UnitType.VANGUARD, UnitType.RANGER}
+                continue
+            if (
+                turn.tick <= motion.activity_until_tick
+                and motion.unit_type in {UnitType.VANGUARD, UnitType.RANGER}
+            ):
+                self.active_enemy_ids.add(unit_id)
+            if (
+                turn.tick <= motion.preemptive_evade_until_tick
+                and motion.unit_type in {UnitType.VANGUARD, UnitType.RANGER}
+            ):
+                self.preemptive_evade_enemy_ids.add(unit_id)
+            if (
+                hidden_ticks < PURSUIT_MEMORY_TTL
+                and motion.unit_type in {UnitType.VANGUARD, UnitType.RANGER}
                 and self._pursuit_is_confirmed(motion)
             ):
                 self.pursuing_enemy_ids.add(unit_id)
@@ -1540,33 +1802,58 @@ class CoreFarmer:
             previous_motion = self.enemy_unit_motion.get(unit_id)
             pursuit_score = 0
             pursuit_ticks = 0
+            activity_until_tick = 0
+            preemptive_evade_until_tick = 0
+            ticks_to_attack_range = None
             if (
                 previous_motion is not None
                 and turn.tick - previous_motion.last_tick
                 <= PURSUIT_MEMORY_TTL
             ):
+                observation_gap = turn.tick - previous_motion.last_tick
                 missed_ticks = max(
                     0,
-                    turn.tick - previous_motion.last_tick - 1,
+                    observation_gap - 1,
                 )
                 pursuit_score = max(
                     0,
                     previous_motion.pursuit_score - missed_ticks,
                 )
+                activity_until_tick = previous_motion.activity_until_tick
+                preemptive_evade_until_tick = (
+                    previous_motion.preemptive_evade_until_tick
+                )
                 if previous_motion.position == enemy_unit.position:
                     pursuit_score = 0
-                elif core_distance < previous_motion.core_distance:
-                    pursuit_score = min(
-                        PURSUIT_SCORE_MAX,
-                        pursuit_score + 2,
-                    )
-                elif core_distance == previous_motion.core_distance:
-                    pursuit_score = min(
-                        PURSUIT_SCORE_MAX,
-                        pursuit_score + 1,
-                    )
                 else:
-                    pursuit_score = max(0, pursuit_score - 1)
+                    activity_until_tick = turn.tick + ACTIVE_ENEMY_ALERT_TICKS
+                    closed_distance = previous_motion.core_distance - core_distance
+                    if closed_distance > 0:
+                        pursuit_score = min(
+                            PURSUIT_SCORE_MAX,
+                            pursuit_score + 2,
+                        )
+                        remaining_distance = max(
+                            0,
+                            core_distance - self._attack_range(enemy_unit.unit_type),
+                        )
+                        ticks_to_attack_range = math.ceil(
+                            remaining_distance * observation_gap / closed_distance
+                        )
+                        if (
+                            ticks_to_attack_range
+                            <= CORE_PREEMPTIVE_EVADE_HORIZON_TICKS
+                        ):
+                            preemptive_evade_until_tick = (
+                                turn.tick + ACTIVE_ENEMY_ALERT_TICKS
+                            )
+                    elif core_distance == previous_motion.core_distance:
+                        pursuit_score = min(
+                            PURSUIT_SCORE_MAX,
+                            pursuit_score + 1,
+                        )
+                    else:
+                        pursuit_score = max(0, pursuit_score - 1)
                 if pursuit_score > 0:
                     pursuit_ticks = previous_motion.pursuit_ticks + 1
             motion = EnemyUnitMotion(
@@ -1576,13 +1863,77 @@ class CoreFarmer:
                 unit_type=enemy_unit.unit_type,
                 pursuit_score=pursuit_score,
                 pursuit_ticks=pursuit_ticks,
+                activity_until_tick=activity_until_tick,
+                preemptive_evade_until_tick=preemptive_evade_until_tick,
+                ticks_to_attack_range=ticks_to_attack_range,
             )
             self.enemy_unit_motion[unit_id] = motion
+            if (
+                enemy_unit.unit_type in {UnitType.VANGUARD, UnitType.RANGER}
+                and turn.tick <= motion.activity_until_tick
+            ):
+                self.active_enemy_ids.add(unit_id)
+            if (
+                enemy_unit.unit_type in {UnitType.VANGUARD, UnitType.RANGER}
+                and turn.tick <= motion.preemptive_evade_until_tick
+            ):
+                self.preemptive_evade_enemy_ids.add(unit_id)
             if (
                 enemy_unit.unit_type in {UnitType.VANGUARD, UnitType.RANGER}
                 and self._pursuit_is_confirmed(motion)
             ):
                 self.pursuing_enemy_ids.add(unit_id)
+
+        core_respawned = any(
+            event.event_type == "CORE_RESPAWNED" for event in turn.events
+        )
+        attack_events = tuple(
+            event
+            for event in turn.events
+            if not core_respawned
+            and event.reason_code == "ATTACK"
+            and event.event_type in {"CORE_DAMAGED", "UNIT_DAMAGED"}
+        )
+        if attack_events:
+            attack_expires_tick = turn.tick + RECENT_ATTACK_MEMORY_TICKS - 1
+            self.recent_attack_until_tick = max(
+                self.recent_attack_until_tick,
+                attack_expires_tick,
+            )
+            if any(event.event_type == "CORE_DAMAGED" for event in attack_events):
+                self.recent_core_attack_until_tick = max(
+                    self.recent_core_attack_until_tick,
+                    attack_expires_tick,
+                )
+            self.threat_caution_until_tick = max(
+                self.threat_caution_until_tick,
+                self.recent_attack_until_tick,
+            )
+            for event in attack_events:
+                for unit_id, position, unit_type in self._attack_event_threats(
+                    event,
+                    visible_units,
+                    prior_motion,
+                ):
+                    self.recent_attack_threats[unit_id] = RememberedThreat(
+                        id=unit_id,
+                        position=position,
+                        unit_type=unit_type,
+                        expires_tick=attack_expires_tick,
+                    )
+        else:
+            for unit_id, remembered in tuple(self.recent_attack_threats.items()):
+                visible = visible_units.get(unit_id)
+                if visible is not None:
+                    self.recent_attack_threats[unit_id] = RememberedThreat(
+                        id=unit_id,
+                        position=visible.position,
+                        unit_type=visible.unit_type,
+                        expires_tick=remembered.expires_tick,
+                    )
+        for unit_id, remembered in tuple(self.recent_attack_threats.items()):
+            if remembered.expires_tick < turn.tick:
+                self.recent_attack_threats.pop(unit_id, None)
 
         for core_id, sighting in tuple(self.stationary_core_memory.items()):
             if turn.tick - sighting.last_tick > STATIONARY_CORE_MEMORY_TTL:
@@ -1647,8 +1998,7 @@ class CoreFarmer:
             current_sighting = self.enemy_core_sightings[core_id]
             if (
                 enemy_core.state is CoreState.NORMAL
-                and current_sighting.observations
-                >= ISOLATED_CORE_CONFIRM_TICKS + 1
+                and current_sighting.observations >= ISOLATED_CORE_CONFIRM_TICKS + 1
             ):
                 self.stationary_core_memory[core_id] = EnemyCoreSighting(
                     position=enemy_core.position,
@@ -1873,6 +2223,18 @@ class CoreFarmer:
         self.scout_target_last_visited.clear()
         self.scout_claims.clear()
         self.scout_chunk_last_seen.clear()
+        self.enemy_unit_sightings.clear()
+        self.enemy_unit_motion.clear()
+        self.active_enemy_ids.clear()
+        self.preemptive_evade_enemy_ids.clear()
+        self.pursuing_enemy_ids.clear()
+        self.recent_attack_until_tick = 0
+        self.recent_core_attack_until_tick = 0
+        self.recent_attack_threats.clear()
+        self.squad_return_ids.clear()
+        self.scout_return_ids.clear()
+        self.scout_cooldown_until.clear()
+        self.squad_disengage_until_tick = 0
 
     def _update_recovery_mode(self, turn: Turn) -> None:
         if turn.core is None:
@@ -2388,12 +2750,16 @@ class CoreFarmer:
         core = turn.core
         if self.startup_tick is None:
             self.startup_tick = turn.tick
+        self._refresh_return_states(turn)
         self._update_recovery_mode(turn)
         self._update_core_movement_history(turn)
         self._update_enemy_awareness(turn)
         self._refresh_compatibility_hold()
         self.combat_pressure_active = self._under_combat_pressure(turn)
         self.stationary_unit_target_id = None
+        active_raid_target = self._active_raid_target_for_recall()
+        if self.combat_pressure_active and active_raid_target is not None:
+            self._recall_strike_group(turn, active_raid_target)
         if self.compatibility_hold or self.combat_pressure_active:
             self._release_core_raid()
             self._release_core_observer()
@@ -2401,14 +2767,12 @@ class CoreFarmer:
         else:
             isolated_core_target = self._select_isolated_core_target(turn)
         stationary_unit_target = None
-        if not self.compatibility_hold and isolated_core_target is None:
+        if (
+            not self.compatibility_hold
+            and not self.combat_pressure_active
+            and isolated_core_target is None
+        ):
             stationary_candidates = self._stationary_enemy_units(turn)
-            if self.combat_pressure_active:
-                stationary_candidates = tuple(
-                    enemy
-                    for enemy in stationary_candidates
-                    if enemy.unit_type in {UnitType.VANGUARD, UnitType.RANGER}
-                )
             stationary_unit_target = self._select_stationary_unit_target(
                 turn,
                 stationary_candidates,
@@ -2425,6 +2789,18 @@ class CoreFarmer:
             if getattr(enemy, "kind") != "CORE"
             and enemy.unit_type in {UnitType.VANGUARD, UnitType.RANGER}
         )
+        if self._strike_group_locally_threatened(
+            turn,
+            combat_target,
+            mobile_enemies,
+        ):
+            self._recall_strike_group(turn, combat_target)
+            self._release_core_raid()
+            self._release_core_observer()
+            self.stationary_unit_target_id = None
+            combat_target = None
+            observer_position = None
+            self.combat_pressure_active = True
         enemy_cells = {enemy.position for enemy in enemies}
         self.known_obstacles.update(turn.obstacle_cells)
         danger_cells = _enemy_threat_cells(enemies, self.known_obstacles)
@@ -2537,12 +2913,21 @@ class CoreFarmer:
         for worker in departing_core_workers:
             if worker.id in preplanned_units:
                 continue
+            if self._control_returning_scout(
+                turn,
+                worker,
+                mobile_enemies,
+                context,
+            ):
+                continue
             if _queue_away_from_enemies(
                 worker,
                 mobile_enemies,
                 context,
                 turn.beacon.position,
             ):
+                if _distance(worker.position, core.position) > SCOUT_SAFE_RETURN_RADIUS:
+                    self.scout_return_ids.add(worker.id)
                 self._set_worker_mode(worker, "EVADE", core.position)
                 continue
             if (
@@ -2628,12 +3013,21 @@ class CoreFarmer:
         for worker in empty_workers:
             if worker.id in departing_ids or worker.id in preplanned_units:
                 continue
+            if self._control_returning_scout(
+                turn,
+                worker,
+                mobile_enemies,
+                context,
+            ):
+                continue
             if _queue_away_from_enemies(
                 worker,
                 mobile_enemies,
                 context,
                 turn.beacon.position,
             ):
+                if _distance(worker.position, core.position) > SCOUT_SAFE_RETURN_RADIUS:
+                    self.scout_return_ids.add(worker.id)
                 self._set_worker_mode(worker, "EVADE", core.position)
                 continue
             if worker.id == observer_id and observer_position is not None:
@@ -2654,7 +3048,7 @@ class CoreFarmer:
             )
 
         for worker_id in tuple(self.scout_progress):
-            if not self.worker_modes.get(worker_id, "").startswith("SCOUT"):
+            if self.worker_modes.get(worker_id) not in {"SCOUT", "SCOUT_BLOCKED"}:
                 self.scout_progress.pop(worker_id, None)
 
         self._control_vanguards(
@@ -2708,6 +3102,150 @@ class CoreFarmer:
             {unit.id for unit in ranger_strikers},
         )
 
+    def _refresh_return_states(self, turn: Turn) -> None:
+        core = turn.core
+        if core is None:
+            self.squad_return_ids.clear()
+            self.scout_return_ids.clear()
+            return
+        defenders = {unit.id: unit for unit in (*turn.vanguards, *turn.rangers)}
+        self.squad_return_ids.intersection_update(defenders)
+        for unit_id in tuple(self.squad_return_ids):
+            unit = defenders[unit_id]
+            guard_radius = (
+                VANGUARD_GUARD_RADIUS
+                if unit.unit_type is UnitType.VANGUARD
+                else RANGER_GUARD_RADIUS
+            )
+            local_threat = any(
+                getattr(enemy, "kind") != "CORE"
+                and enemy.unit_type in {UnitType.VANGUARD, UnitType.RANGER}
+                and _distance(unit.position, enemy.position)
+                <= UNIT_EVADE_TRIGGER_DISTANCE
+                for enemy in turn.visible_enemies
+            )
+            if (
+                not local_threat
+                and _distance(unit.position, core.position) <= guard_radius
+            ):
+                self.squad_return_ids.discard(unit_id)
+
+        worker_ids = {worker.id for worker in turn.workers}
+        self.scout_return_ids.intersection_update(worker_ids)
+        for worker_id in tuple(self.scout_cooldown_until):
+            if (
+                worker_id not in worker_ids
+                or self.scout_cooldown_until[worker_id] < turn.tick
+            ):
+                self.scout_cooldown_until.pop(worker_id, None)
+
+    def _recall_strike_group(self, turn: Turn, target: object | None) -> None:
+        strike_vanguards, strike_rangers = self._strike_group_ids(turn, target)
+        self.squad_return_ids.update(strike_vanguards)
+        self.squad_return_ids.update(strike_rangers)
+        if self.core_raid_spotter_id is not None:
+            self.scout_return_ids.add(self.core_raid_spotter_id)
+        self.squad_disengage_until_tick = max(
+            self.squad_disengage_until_tick,
+            turn.tick + SQUAD_DISENGAGE_TICKS,
+        )
+
+    def _active_raid_target_for_recall(self) -> CoreRaidTarget | None:
+        target_id = self.isolated_core_target_id
+        if target_id is None:
+            return None
+        remembered = self.stationary_core_memory.get(target_id)
+        if remembered is None:
+            return None
+        return CoreRaidTarget(
+            id=target_id,
+            position=remembered.position,
+            visible_enemy=None,
+        )
+
+    def _strike_group_locally_threatened(
+        self,
+        turn: Turn,
+        target: object | None,
+        enemies: Sequence[object],
+    ) -> bool:
+        if target is None:
+            return False
+        strike_vanguards, strike_rangers = self._strike_group_ids(turn, target)
+        strike_ids = strike_vanguards | strike_rangers
+        if self.core_raid_spotter_id is not None:
+            strike_ids.add(self.core_raid_spotter_id)
+        members = [unit for unit in turn.units if unit.id in strike_ids]
+        target_id = getattr(target, "id", None)
+        return any(
+            enemy.id != target_id
+            and any(
+                _distance(member.position, enemy.position)
+                <= UNIT_EVADE_TRIGGER_DISTANCE
+                for member in members
+            )
+            for enemy in enemies
+        )
+
+    def _control_returning_scout(
+        self,
+        turn: Turn,
+        worker: object,
+        enemies: Sequence[object],
+        context: MovementContext,
+    ) -> bool:
+        core = turn.core
+        if core is None:
+            return False
+        nearby_enemies = tuple(
+            enemy
+            for enemy in enemies
+            if _distance(worker.position, enemy.position)
+            <= UNIT_EVADE_TRIGGER_DISTANCE
+        )
+        if nearby_enemies:
+            self.scout_cooldown_until.pop(worker.id, None)
+            self.scout_return_ids.add(worker.id)
+        cooldown_until = self.scout_cooldown_until.get(worker.id, 0)
+        if cooldown_until >= turn.tick:
+            worker.wait()
+            self._set_worker_mode(worker, "SCOUT_COOLDOWN", core.position)
+            return True
+        if worker.id not in self.scout_return_ids:
+            return False
+        if nearby_enemies and _queue_away_from_enemies(
+            worker,
+            nearby_enemies,
+            context,
+            turn.beacon.position,
+        ):
+            self._set_worker_mode(worker, "SCOUT_EVADE", core.position)
+            return True
+        if (
+            not nearby_enemies
+            and _distance(worker.position, core.position)
+            <= SCOUT_SAFE_RETURN_RADIUS
+        ):
+            self.scout_return_ids.discard(worker.id)
+            self.scout_cooldown_until[worker.id] = (
+                turn.tick + SCOUT_COOLDOWN_TICKS
+            )
+            worker.wait()
+            self._set_worker_mode(worker, "SCOUT_COOLDOWN", core.position)
+            return True
+        if _queue_toward(
+            worker,
+            core.position,
+            context,
+            allow_core_entry=True,
+            allow_single_friendly_transit=True,
+        ):
+            self._set_worker_mode(worker, "SCOUT_RETURN", core.position)
+        else:
+            worker.wait()
+            self._set_worker_mode(worker, "SCOUT_RETURN_BLOCKED", core.position)
+        return True
+
     def _control_vanguards(
         self,
         turn: Turn,
@@ -2746,7 +3284,10 @@ class CoreFarmer:
                 and _distance(vanguard.position, enemy.position) == 1
             ]
             if immediate_core_threats:
-                target = min(immediate_core_threats, key=_uuid_sort_key)
+                target = min(
+                    immediate_core_threats,
+                    key=lambda enemy: _combat_target_key(vanguard.position, enemy),
+                )
                 direction = _direction_to_adjacent(vanguard.position, target.position)
                 if direction is not None:
                     vanguard.sweep(direction)
@@ -2767,7 +3308,6 @@ class CoreFarmer:
                 enemy
                 for enemy in enemies
                 if enemy.id in self.pursuing_enemy_ids
-                and self.enemy_unit_motion[enemy.id].pursuit_ticks % 2 == 1
                 and _distance(vanguard.position, enemy.position) == 1
             ]
             if pursuing_adjacent:
@@ -2800,6 +3340,44 @@ class CoreFarmer:
                 if _distance(vanguard.position, enemy.position)
                 <= UNIT_EVADE_TRIGGER_DISTANCE
             ]
+            adjacent = [
+                enemy
+                for enemy in nearby_enemies
+                if _distance(vanguard.position, enemy.position) == 1
+            ]
+            if self.combat_pressure_active and adjacent:
+                target = min(
+                    adjacent,
+                    key=lambda enemy: _combat_target_key(vanguard.position, enemy),
+                )
+                direction = _direction_to_adjacent(vanguard.position, target.position)
+                if direction is not None:
+                    vanguard.sweep(direction)
+                    continue
+            if self.combat_pressure_active:
+                target_position = _guard_post(
+                    vanguard,
+                    core.position,
+                    context,
+                    _defense_post_directions(
+                        core.position,
+                        enemies,
+                        CARDINAL_DIRECTIONS,
+                        defender_index=index,
+                        priority_ids=(
+                            self.active_enemy_ids | self.pursuing_enemy_ids
+                        ),
+                    ),
+                    VANGUARD_GUARD_RADIUS,
+                )
+                if target_position != vanguard.position and _queue_toward(
+                    vanguard,
+                    target_position,
+                    context,
+                ):
+                    continue
+                vanguard.wait()
+                continue
             if _queue_away_from_enemies(
                 vanguard,
                 nearby_enemies,
@@ -2808,13 +3386,11 @@ class CoreFarmer:
                 keep_core_neighbors_clear=True,
             ):
                 continue
-            adjacent = [
-                enemy
-                for enemy in nearby_enemies
-                if _distance(vanguard.position, enemy.position) == 1
-            ]
             if adjacent:
-                target = min(adjacent, key=lambda enemy: (_uuid_sort_key(enemy),))
+                target = min(
+                    adjacent,
+                    key=lambda enemy: _combat_target_key(vanguard.position, enemy),
+                )
                 direction = _direction_to_adjacent(vanguard.position, target.position)
                 if direction is not None:
                     vanguard.sweep(direction)
@@ -2840,11 +3416,14 @@ class CoreFarmer:
                 VANGUARD_GUARD_RADIUS,
             )
             if target_position != vanguard.position:
-                _queue_toward(
+                moved = _queue_toward(
                     vanguard,
                     target_position,
                     context,
                 )
+                if moved:
+                    continue
+            vanguard.wait()
 
     def _control_rangers(
         self,
@@ -2891,12 +3470,9 @@ class CoreFarmer:
             if immediate_core_threats:
                 target = min(
                     immediate_core_threats,
-                    key=lambda enemy: (
-                        _ranger_line_range(ranger.position, enemy.position),
-                        _uuid_sort_key(enemy),
-                    ),
+                    key=lambda enemy: _combat_target_key(ranger.position, enemy),
                 )
-                ranger.shoot(target)
+                ranger.shoot_cell(target.position)
                 continue
             if self._healing_return_ready(turn, ranger):
                 if ranger.position == core.position:
@@ -2914,7 +3490,6 @@ class CoreFarmer:
                 enemy
                 for enemy in enemies
                 if enemy.id in self.pursuing_enemy_ids
-                and self.enemy_unit_motion[enemy.id].pursuit_ticks % 2 == 1
                 and _ranger_can_shoot(
                     ranger.position,
                     enemy.position,
@@ -2924,12 +3499,9 @@ class CoreFarmer:
             if pursuing_targets:
                 pursuer = min(
                     pursuing_targets,
-                    key=lambda enemy: (
-                        _ranger_line_range(ranger.position, enemy.position),
-                        _uuid_sort_key(enemy),
-                    ),
+                    key=lambda enemy: _combat_target_key(ranger.position, enemy),
                 )
-                ranger.shoot(pursuer)
+                ranger.shoot_cell(pursuer.position)
                 continue
             strike_member = ranger.id in strike_rangers
             if strike_member:
@@ -2958,6 +3530,46 @@ class CoreFarmer:
                 if _distance(ranger.position, enemy.position)
                 <= UNIT_EVADE_TRIGGER_DISTANCE
             ]
+            shootable = [
+                enemy
+                for enemy in nearby_enemies
+                if _ranger_can_shoot(
+                    ranger.position,
+                    enemy.position,
+                    context.obstacles,
+                )
+            ]
+            if self.combat_pressure_active and shootable:
+                target = min(
+                    shootable,
+                    key=lambda enemy: _combat_target_key(ranger.position, enemy),
+                )
+                ranger.shoot_cell(target.position)
+                continue
+            if self.combat_pressure_active:
+                target_position = _guard_post(
+                    ranger,
+                    core.position,
+                    context,
+                    _defense_post_directions(
+                        core.position,
+                        enemies,
+                        CARDINAL_DIRECTIONS,
+                        defender_index=index,
+                        priority_ids=(
+                            self.active_enemy_ids | self.pursuing_enemy_ids
+                        ),
+                    ),
+                    RANGER_GUARD_RADIUS,
+                )
+                if target_position != ranger.position and _queue_toward(
+                    ranger,
+                    target_position,
+                    context,
+                ):
+                    continue
+                ranger.wait()
+                continue
             if _queue_away_from_enemies(
                 ranger,
                 nearby_enemies,
@@ -2966,26 +3578,12 @@ class CoreFarmer:
                 keep_core_neighbors_clear=True,
             ):
                 continue
-            shootable = []
-            for enemy in nearby_enemies:
-                if not _ranger_can_shoot(
-                    ranger.position,
-                    enemy.position,
-                    context.obstacles,
-                ):
-                    continue
-                shootable.append(enemy)
-
             if shootable:
                 target = min(
                     shootable,
-                    key=lambda enemy: (
-                        _distance(ranger.position, enemy.position),
-                        getattr(enemy, "kind") != "CORE",
-                        _uuid_sort_key(enemy),
-                    ),
+                    key=lambda enemy: _combat_target_key(ranger.position, enemy),
                 )
-                ranger.shoot(target)
+                ranger.shoot_cell(target.position)
                 continue
 
             if nearby_enemies:
@@ -3008,11 +3606,14 @@ class CoreFarmer:
                 RANGER_GUARD_RADIUS,
             )
             if target_position != ranger.position:
-                _queue_toward(
+                moved = _queue_toward(
                     ranger,
                     target_position,
                     context,
                 )
+                if moved:
+                    continue
+            ranger.wait()
 
     def _should_wait_for_cargo(
         self,
@@ -3054,7 +3655,6 @@ class CoreFarmer:
         blocked = (
             set(context.obstacles)
             | set(context.enemy_cells)
-            | set(context.danger_cells)
             | set(turn.resource_cells)
         )
         blocked.update(
@@ -3079,6 +3679,7 @@ class CoreFarmer:
             core.position,
             turn.beacon.position,
             enemies,
+            context.obstacles,
             self._core_blocked_cells(turn, context),
             self.last_retreat_direction,
             allow_beacon_approach=reason == "EVADE",
@@ -3109,17 +3710,19 @@ class CoreFarmer:
             self.last_core_cancel_reason = "DESTINATION_BLOCKED"
             return True
 
-        current_enemy_distance = SIGNED_INT64_MAX
-        destination_enemy_distance = SIGNED_INT64_MAX
         if enemies:
-            current_enemy_distance = _minimum_enemy_distance(
+            current_threat_key = _position_threat_key(
                 core.position,
                 enemies,
+                context.obstacles,
             )
-            destination_enemy_distance = _minimum_enemy_distance(
+            destination_threat_key = _position_threat_key(
                 destination,
                 enemies,
+                context.obstacles,
             )
+            current_enemy_distance = _minimum_enemy_distance(core.position, enemies)
+            destination_enemy_distance = _minimum_enemy_distance(destination, enemies)
             enemy_cancel_radius = (
                 CORE_EVADE_RELEASE_DISTANCE
                 if self.active_core_move_reason == "EVADE"
@@ -3131,42 +3734,30 @@ class CoreFarmer:
             )
             if (
                 enemy_threat_relevant
-                and destination_enemy_distance <= current_enemy_distance
+                and destination_threat_key[0] > current_threat_key[0]
             ):
-                self.last_core_cancel_reason = (
-                    "ENEMY_DISTANCE_WORSE"
-                    if destination_enemy_distance < current_enemy_distance
-                    else "ENEMY_DISTANCE_NOT_IMPROVING"
-                )
+                self.last_core_cancel_reason = "PROJECTED_DAMAGE_WORSE"
                 return True
+            if (
+                self.active_core_move_reason == "EVADE"
+                and self.combat_pressure_active
+                and destination_threat_key[0] <= current_threat_key[0]
+            ):
+                return False
+            if enemy_threat_relevant and destination_threat_key > current_threat_key:
+                self.last_core_cancel_reason = "ENEMY_RISK_WORSE"
+                return True
+            if destination_threat_key <= current_threat_key:
+                return False
 
-        finishing_safe_evasion = (
-            bool(enemies)
-            and destination_enemy_distance > current_enemy_distance
-            and core.view.move_progress is not None
-            and core.view.move_required_ticks is not None
-            and core.view.move_progress >= core.view.move_required_ticks - 1
-        )
         projected_hp_damage = max(0, projected_core_damage - core.shield)
         if (
             projected_hp_damage > 0
             and core_survival_margin > 0
             and turn.resources >= 1
-            and not finishing_safe_evasion
         ):
             self.last_core_cancel_reason = "PROJECTED_HEAL"
             return True
-
-        improving_evasion = (
-            bool(enemies)
-            and destination_enemy_distance > current_enemy_distance
-            and (
-                current_enemy_distance <= CORE_EVADE_TRIGGER_DISTANCE
-                or self.active_core_move_reason == "EVADE"
-            )
-        )
-        if improving_evasion:
-            return False
 
         if (
             self.active_core_move_reason == "EVADE"
@@ -3212,6 +3803,7 @@ class CoreFarmer:
             if getattr(enemy, "kind") != "CORE"
             and enemy.unit_type in {UnitType.VANGUARD, UnitType.RANGER}
         )
+        retreat_enemies = enemies + self._remembered_retreat_threats(turn, enemies)
         projected_core_damage = _projected_core_damage(
             core.position,
             enemies,
@@ -3235,7 +3827,7 @@ class CoreFarmer:
             if self._moving_core_should_cancel(
                 turn,
                 context,
-                enemies,
+                retreat_enemies,
                 projected_core_damage=projected_core_damage,
                 core_survival_margin=core_survival_margin,
             ):
@@ -3266,7 +3858,7 @@ class CoreFarmer:
         nearest_threat = min(
             (
                 _distance(core.position, enemy.position)
-                for enemy in enemies
+                for enemy in retreat_enemies
             ),
             default=None,
         )
@@ -3287,13 +3879,18 @@ class CoreFarmer:
             return
 
         if (
-            enemies
+            retreat_enemies
             and nearest_threat is not None
-            and nearest_threat <= CORE_EVADE_TRIGGER_DISTANCE
+            and (
+                nearest_threat <= CORE_EVADE_TRIGGER_DISTANCE
+                or self.preemptive_evade_enemy_ids
+                or self.pursuing_enemy_ids
+                or turn.tick <= self.recent_core_attack_until_tick
+            )
             and self._start_core_retreat(
                 turn,
                 context,
-                enemies,
+                retreat_enemies,
                 reason="EVADE",
             )
         ):
@@ -3343,6 +3940,10 @@ class CoreFarmer:
             ):
                 core.spawn(UnitType.RANGER)
                 return
+
+        if self.combat_pressure_active:
+            core.wait()
+            return
 
         if can_spawn:
             early_worker_goal = min(
@@ -3744,8 +4345,16 @@ def _position_diagnostics(turn: Turn, tactic: CoreFarmer) -> str:
         f"clear_core_target={str(tactic.isolated_core_target_id)[:8] if tactic.isolated_core_target_id else 'none'} "
         f"core_spotter={str(tactic.core_raid_spotter_id)[:8] if tactic.core_raid_spotter_id else 'none'} "
         f"clear_unit_target={str(tactic.stationary_unit_target_id)[:8] if tactic.stationary_unit_target_id else 'none'} "
+        f"active_enemies={len(tactic.active_enemy_ids)} "
+        f"preemptive_evade={len(tactic.preemptive_evade_enemy_ids)} "
         f"pursuing_enemies={len(tactic.pursuing_enemy_ids)} "
+        f"recent_attack_threats={len(tactic.recent_attack_threats)} "
+        f"recent_attack_until={tactic.recent_attack_until_tick} "
+        f"recent_core_attack_until={tactic.recent_core_attack_until_tick} "
         f"combat_pressure={int(tactic.combat_pressure_active)} "
+        f"squad_return={len(tactic.squad_return_ids)} "
+        f"scout_return={len(tactic.scout_return_ids)} "
+        f"squad_disengage_until={tactic.squad_disengage_until_tick} "
         f"healing_defenders={len(tactic.healing_defender_ids)} "
         f"compatibility_hold={int(tactic.compatibility_hold)} "
         f"threat_caution_until={tactic.threat_caution_until_tick} "

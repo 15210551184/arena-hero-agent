@@ -176,6 +176,7 @@ Before the first public commit, follow the [release checklist](docs/release-chec
 - [LINUX DO](https://linux.do/) - an open-source community this project recognizes and supports
 - [Documentation index](docs/README.md)
 - [Strategy design](docs/strategy.md)
+- [Threat response state machine](docs/threat-response.md)
 - [Contributing](CONTRIBUTING.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
 - [Security policy](SECURITY.md)

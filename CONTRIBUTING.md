@@ -9,6 +9,16 @@ corrections may go directly to a focused pull request.
 
 ## Setup
 
+Before changing any tracked file, synchronize the clean `main` checkout with
+GitHub using the cross-platform preflight:
+
+```bash
+python scripts/sync-main.py
+```
+
+The command fetches only `origin/main`, fast-forwards when the checkout is
+behind, and refuses dirty, ahead, divergent, detached, or non-`main` states.
+
 ```bash
 python -m venv .venv
 python -m pip install --require-hashes -r requirements-build.lock
@@ -19,8 +29,9 @@ python -m unittest discover -v
 
 On Windows, `scripts/bootstrap.ps1` performs the same setup. On POSIX systems, use `sh scripts/bootstrap.sh`.
 
-Create a topic branch from the current `main` branch. Keep commits scoped and
-write commit messages that describe the behavior changed, not only the files.
+After the preflight succeeds, create a topic branch when contributing through a
+pull request. Keep commits scoped and write commit messages that describe the
+behavior changed, not only the files.
 
 ## Before Opening a Pull Request
 

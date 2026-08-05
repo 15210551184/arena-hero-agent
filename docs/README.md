@@ -8,6 +8,8 @@ Use the document that matches the task:
   installation, operations, rollback, and uninstall procedures.
 - [Strategy](strategy.md): deterministic resource, survival, defense, scouting,
   and bounded-combat policy.
+- [Threat response](threat-response.md): alert, pre-evasion, multi-axis
+  breakout, detached-squad, Scout-return, and offline optimization states.
 - [Release checklist](release-checklist.md): credential hygiene, validation, and
   GitHub release requirements.
 
