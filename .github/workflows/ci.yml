@@ -63,15 +63,16 @@ jobs:
         run: python scripts/check_secrets.py
       - name: Validate shell scripts
         run: |
-          sh -n docker/entrypoint.sh scripts/bootstrap.sh scripts/run-agent.sh scripts/install-systemd.sh scripts/rollback-systemd.sh
+          sh -n docker/entrypoint.sh scripts/bootstrap.sh scripts/run-agent.sh scripts/install-systemd.sh scripts/rollback-systemd.sh scripts/update-systemd.sh
           sh scripts/install-systemd.sh --help >/dev/null
           sh scripts/rollback-systemd.sh --help >/dev/null
+          sh scripts/update-systemd.sh --help >/dev/null
           if sh scripts/install-systemd.sh --with-supervisor --without-supervisor 2>/dev/null; then
             echo "conflicting installer flags unexpectedly succeeded" >&2
             exit 1
           fi
       - name: Simulate versioned systemd deployment and rollback
-        run: python -m unittest -v test_systemd_deploy
+        run: python -m unittest -v test_systemd_deploy test_systemd_update
       - name: Validate PowerShell scripts
         shell: pwsh
         run: |

@@ -110,6 +110,22 @@ monitor. A failed compatibility, restart, or health check restores the prior
 release. After a successful upgrade, use `sudo arena-hero-rollback` for an
 immediate version swap.
 
+After strategy code is published, update an existing running systemd instance
+from its checkout with one command:
+
+```bash
+sh scripts/update-systemd.sh
+```
+
+Run the updater as the checkout owner, without `sudo`. It accepts only a clean
+branch with a configured upstream, fetches and verifies a fast-forward update,
+builds and validates the new release, then elevates only the transactional
+install step. systemd stops the old strategy process during restart before it
+starts the new version, so two main Agent instances do not run in parallel.
+Existing credentials, runtime tuning, and enabled optional components are
+preserved. The previous release remains active while the new release is being
+prepared, and is restored if restart or health validation fails.
+
 Optional components are explicit:
 
 ```bash

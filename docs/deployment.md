@@ -282,12 +282,47 @@ The supervisor and optimizer are oneshot services; stop an active run with `syst
 
 ### Updating and rollback
 
-Check out a reviewed release and rerun the installer. Existing `/etc`
-credentials and runtime tuning are retained unless an explicit replacement
-file is provided. Installer and rollback operations share a non-blocking
-deployment lock; a concurrent operation exits without changing release links.
-Both commands recover a pending release-link transaction before reading
-`current` or `previous`.
+For a checkout that follows a reviewed upstream branch, switch a running game
+instance to the latest published strategy with:
+
+```bash
+cd /path/to/arena-hero-agent
+sh scripts/update-systemd.sh
+```
+
+Run the command as the checkout owner, without `sudo`. The updater refuses a
+dirty worktree, detached HEAD, missing upstream, unsupported remote name, or
+non-fast-forward history. Git authentication and the fast-forward merge happen
+before privilege escalation. The updater does not accept installer or
+credential arguments and clears `ARENA_HERO_API_KEY` for the install step, so an
+unrelated shell variable cannot replace the protected systemd credential.
+
+After Git validation, the updater invokes the transactional installer with no
+configuration overrides. Existing `/etc` credentials, runtime tuning, private
+AI configuration, and enabled optional components are retained. Running the
+command while the checkout is already current still redeploys that commit, which
+is useful when the source checkout is newer than the active instance.
+
+The old strategy keeps running while the installer builds and validates the new
+immutable release. Activation updates `current` and restarts the single
+`arena-hero-agent.service`; systemd completes the stop of the old strategy
+process before starting the new process from `current`, so two main Agent
+instances do not run in parallel. A post-restart health check confirms the new
+strategy is running before the update reports success.
+
+Use the full installer directly when intentionally changing components,
+credentials, Python selection, or deploying a reviewed detached release. Do not
+run `sudo git pull`; keep Git operations under the checkout owner and elevate
+only `scripts/install-systemd.sh`.
+
+Installer, updater, and rollback operations ultimately share the installer's
+non-blocking deployment lock; a concurrent deployment exits without changing
+release links. The installer and rollback command recover a pending release-link
+transaction before reading `current` or `previous`. A failed update leaves the
+old release active or restores it automatically, while preserving the original
+installer exit code. If automatic recovery itself fails, inspect the service and
+release links manually; the updater cannot guarantee which version is active in
+that exceptional state.
 
 Before updating, record the installed version and back up the restricted configuration:
 
