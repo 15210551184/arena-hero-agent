@@ -6,7 +6,7 @@
 [![Release image](https://github.com/Drew-Z/arena-hero-agent/actions/workflows/release.yml/badge.svg)](https://github.com/Drew-Z/arena-hero-agent/actions/workflows/release.yml)
 [![License](https://img.shields.io/github/license/Drew-Z/arena-hero-agent)](LICENSE)
 
-A deterministic, resource-first long-running agent for [Arena Hero](https://doc.arenahero.io/). It uses the official `arena-hero` Python SDK, keeps decisions inside the 15-second Tick window, and can run locally, in Docker, or as hardened systemd services.
+A deterministic, resource-first long-running agent for [Arena Hero](https://doc.arenahero.io/). It uses a hierarchical threat controller and the official `arena-hero` Python SDK, keeps decisions inside the 15-second Tick window, and can run locally, in Docker, or as hardened systemd services.
 
 This is a community project and is not an official Arena Hero product.
 
@@ -14,6 +14,7 @@ This is a community project and is not an official Arena Hero product.
 
 - Builds toward `12 Workers + 3 Vanguards + 4 Rangers = 19` population, staying below the 20-population resource penalty.
 - Moves the Core away from the Beacon, prioritizes collection and survival, and maintains distributed Core defense.
+- Classifies lifecycle, threat, and Unit missions independently, including activity alerts, pre-evasion, engagement, multi-axis breakout, and detached-squad return.
 - Scouts stale map regions, tracks resource memory, returns cargo, and recovers dropped cargo after losses.
 - Avoids active enemy fleets while opportunistically clearing confirmed stationary threats or isolated Cores.
 - Detects game/SDK compatibility changes before unattended play continues.
@@ -23,6 +24,8 @@ This is a community project and is not an official Arena Hero product.
 flowchart LR
     Game["Arena Hero API"] -->|"authoritative Turn"| Agent["Deterministic Agent"]
     Agent -->|"one current-Tick plan"| Game
+    Agent --> Assessment["Hierarchical threat assessment"]
+    Assessment --> Agent
     Agent --> Logs["Structured logs"]
     Logs --> Supervisor["Optional deterministic supervisor"]
     Supervisor -. "explicit AI opt-in" .-> Model["Responses-compatible model channel"]

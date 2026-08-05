@@ -11,6 +11,7 @@ import time
 from collections import Counter, deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from enum import Enum
 from getpass import getpass
 from itertools import count
 from pathlib import Path
@@ -162,6 +163,32 @@ SCOUT_COVERAGE_MEMORY_TTL = 4096
 Position = tuple[int, int]
 
 
+class LifecycleMode(str, Enum):
+    ACTIVE = "ACTIVE"
+    RESPAWNING = "RESPAWNING"
+    COMPATIBILITY_HOLD = "COMPATIBILITY_HOLD"
+    RECOVERY = "RECOVERY"
+
+
+class ThreatLevel(str, Enum):
+    NORMAL = "NORMAL"
+    ALERT = "ALERT"
+    PRE_EVADE = "PRE_EVADE"
+    ENGAGED = "ENGAGED"
+    BREAKOUT = "BREAKOUT"
+
+
+class GlobalPosture(str, Enum):
+    NORMAL = "NORMAL"
+    ALERT = "ALERT"
+    PRE_EVADE = "PRE_EVADE"
+    ENGAGED = "ENGAGED"
+    BREAKOUT = "BREAKOUT"
+    RECOVERY = "RECOVERY"
+    COMPATIBILITY_HOLD = "COMPATIBILITY_HOLD"
+    RESPAWNING = "RESPAWNING"
+
+
 def _chunk_coordinates(position: Position) -> Position:
     return position[0] // 32, position[1] // 32
 
@@ -245,6 +272,45 @@ class RememberedThreat:
     position: Position
     unit_type: UnitType
     expires_tick: int
+
+
+@dataclass(slots=True, frozen=True)
+class ThreatAssessment:
+    lifecycle: LifecycleMode = LifecycleMode.ACTIVE
+    level: ThreatLevel = ThreatLevel.NORMAL
+    primary_reason: str = "NONE"
+    recent_attack: bool = False
+    recent_core_attack: bool = False
+    activity_enemy_ids: frozenset[UUID] = frozenset()
+    preemptive_enemy_ids: frozenset[UUID] = frozenset()
+    pursuing_enemy_ids: frozenset[UUID] = frozenset()
+    near_core_enemy_ids: frozenset[UUID] = frozenset()
+    threatening_core_enemy_ids: frozenset[UUID] = frozenset()
+    disengaging: bool = False
+    local_squad_contact: bool = False
+    caution: bool = False
+    breakout: bool = False
+
+    @property
+    def combat_pressure(self) -> bool:
+        return bool(
+            self.recent_attack
+            or self.disengaging
+            or self.activity_enemy_ids
+            or self.pursuing_enemy_ids
+            or self.near_core_enemy_ids
+            or self.local_squad_contact
+        )
+
+    @property
+    def global_posture(self) -> GlobalPosture:
+        if self.lifecycle is LifecycleMode.RESPAWNING:
+            return GlobalPosture.RESPAWNING
+        if self.lifecycle is LifecycleMode.COMPATIBILITY_HOLD:
+            return GlobalPosture.COMPATIBILITY_HOLD
+        if self.lifecycle is LifecycleMode.RECOVERY:
+            return GlobalPosture.RECOVERY
+        return GlobalPosture(self.level.value)
 
 
 @dataclass(slots=True, frozen=True)
@@ -496,6 +562,40 @@ def _retreat_direction(
     ):
         return None
     return best_direction
+
+
+def _threat_axis(origin: Position, target: Position) -> Direction:
+    dx = target[0] - origin[0]
+    dy = target[1] - origin[1]
+    if abs(dx) >= abs(dy):
+        return Direction.RIGHT if dx >= 0 else Direction.LEFT
+    return Direction.DOWN if dy >= 0 else Direction.UP
+
+
+def _is_multi_axis_breakout(
+    position: Position,
+    enemies: Sequence[object],
+    obstacles: set[Position],
+    blocked: set[Position],
+) -> bool:
+    if len(enemies) < 2 or _projected_core_damage(position, enemies, obstacles) == 0:
+        return False
+    if len({_threat_axis(position, enemy.position) for enemy in enemies}) < 2:
+        return False
+
+    current_distances = {
+        enemy.id: _distance(position, enemy.position) for enemy in enemies
+    }
+    for direction in CARDINAL_DIRECTIONS:
+        destination = _destination(position, direction)
+        if destination in blocked or not _is_signed_int64_position(destination):
+            continue
+        if all(
+            _distance(destination, enemy.position) > current_distances[enemy.id]
+            for enemy in enemies
+        ):
+            return False
+    return True
 
 
 def _directions_toward(start: Position, target: Position) -> tuple[Direction, ...]:
@@ -1380,6 +1480,7 @@ class CoreFarmer:
         self.recent_attack_until_tick = 0
         self.recent_core_attack_until_tick = 0
         self.recent_attack_threats: dict[UUID, RememberedThreat] = {}
+        self.threat_assessment = ThreatAssessment()
         self.combat_pressure_active = False
         self.squad_return_ids: set[UUID] = set()
         self.scout_return_ids: set[UUID] = set()
@@ -1492,22 +1593,116 @@ class CoreFarmer:
             for enemy in turn.visible_enemies
         )
 
-    def _under_combat_pressure(self, turn: Turn) -> bool:
-        if turn.core is None:
-            return False
-        return (
-            turn.tick <= self.recent_attack_until_tick
-            or turn.tick <= self.squad_disengage_until_tick
-            or bool(self.active_enemy_ids)
-            or bool(self.pursuing_enemy_ids)
-            or any(
-                getattr(enemy, "kind") != "CORE"
-                and enemy.unit_type in {UnitType.VANGUARD, UnitType.RANGER}
-                and _distance(turn.core.position, enemy.position)
-                <= CORE_EVADE_TRIGGER_DISTANCE
-                for enemy in turn.visible_enemies
+    def _assess_threat(
+        self,
+        turn: Turn,
+        *,
+        breakout: bool = False,
+        local_squad_contact: bool = False,
+    ) -> ThreatAssessment:
+        core = turn.core
+        if core is None:
+            return ThreatAssessment(
+                lifecycle=LifecycleMode.RESPAWNING,
+                primary_reason="CORE_RESPAWNING",
+            )
+
+        visible_combat_enemies = tuple(
+            enemy
+            for enemy in turn.visible_enemies
+            if getattr(enemy, "kind") != "CORE"
+            and enemy.unit_type in {UnitType.VANGUARD, UnitType.RANGER}
+        )
+        near_core_enemy_ids = frozenset(
+            enemy.id
+            for enemy in visible_combat_enemies
+            if _distance(core.position, enemy.position)
+            <= CORE_EVADE_TRIGGER_DISTANCE
+        )
+        threatening_core_enemy_ids = frozenset(
+            enemy.id
+            for enemy in _core_threatening_enemies(
+                core.position,
+                visible_combat_enemies,
+                self.known_obstacles,
             )
         )
+        recent_attack = turn.tick <= self.recent_attack_until_tick
+        recent_core_attack = turn.tick <= self.recent_core_attack_until_tick
+        disengaging = turn.tick <= self.squad_disengage_until_tick
+        caution = turn.tick <= self.threat_caution_until_tick
+
+        if self.compatibility_hold:
+            lifecycle = LifecycleMode.COMPATIBILITY_HOLD
+        elif self.recovery_mode:
+            lifecycle = LifecycleMode.RECOVERY
+        else:
+            lifecycle = LifecycleMode.ACTIVE
+
+        if breakout:
+            level = ThreatLevel.BREAKOUT
+            primary_reason = "MULTI_AXIS_BREAKOUT"
+        elif recent_core_attack:
+            level = ThreatLevel.ENGAGED
+            primary_reason = "RECENT_CORE_ATTACK"
+        elif local_squad_contact:
+            level = ThreatLevel.ENGAGED
+            primary_reason = "LOCAL_SQUAD_CONTACT"
+        elif recent_attack:
+            level = ThreatLevel.ENGAGED
+            primary_reason = "RECENT_FLEET_ATTACK"
+        elif threatening_core_enemy_ids:
+            level = ThreatLevel.ENGAGED
+            primary_reason = "CURRENT_CORE_ATTACK"
+        elif self.pursuing_enemy_ids:
+            level = ThreatLevel.PRE_EVADE
+            primary_reason = "CONFIRMED_PURSUIT"
+        elif self.preemptive_evade_enemy_ids:
+            level = ThreatLevel.PRE_EVADE
+            primary_reason = "TIME_TO_RANGE"
+        elif near_core_enemy_ids:
+            level = ThreatLevel.PRE_EVADE
+            primary_reason = "CORE_DISTANCE_FALLBACK"
+        elif self.active_enemy_ids:
+            level = ThreatLevel.ALERT
+            primary_reason = "HOSTILE_ACTIVITY"
+        elif disengaging:
+            level = ThreatLevel.ALERT
+            primary_reason = "SQUAD_DISENGAGING"
+        else:
+            level = ThreatLevel.NORMAL
+            primary_reason = "NONE"
+
+        return ThreatAssessment(
+            lifecycle=lifecycle,
+            level=level,
+            primary_reason=primary_reason,
+            recent_attack=recent_attack,
+            recent_core_attack=recent_core_attack,
+            activity_enemy_ids=frozenset(self.active_enemy_ids),
+            preemptive_enemy_ids=frozenset(self.preemptive_evade_enemy_ids),
+            pursuing_enemy_ids=frozenset(self.pursuing_enemy_ids),
+            near_core_enemy_ids=near_core_enemy_ids,
+            threatening_core_enemy_ids=threatening_core_enemy_ids,
+            disengaging=disengaging,
+            local_squad_contact=local_squad_contact,
+            caution=caution,
+            breakout=breakout,
+        )
+
+    def _refresh_threat_assessment(
+        self,
+        turn: Turn,
+        *,
+        breakout: bool = False,
+        local_squad_contact: bool = False,
+    ) -> None:
+        self.threat_assessment = self._assess_threat(
+            turn,
+            breakout=breakout,
+            local_squad_contact=local_squad_contact,
+        )
+        self.combat_pressure_active = self.threat_assessment.combat_pressure
 
     def _remembered_retreat_threats(
         self,
@@ -2745,6 +2940,7 @@ class CoreFarmer:
     def choose_actions(self, turn: Turn) -> None:
         turn.clear()
         if turn.core is None:
+            self._refresh_threat_assessment(turn)
             return
 
         core = turn.core
@@ -2755,7 +2951,8 @@ class CoreFarmer:
         self._update_core_movement_history(turn)
         self._update_enemy_awareness(turn)
         self._refresh_compatibility_hold()
-        self.combat_pressure_active = self._under_combat_pressure(turn)
+        self.known_obstacles.update(turn.obstacle_cells)
+        self._refresh_threat_assessment(turn)
         self.stationary_unit_target_id = None
         active_raid_target = self._active_raid_target_for_recall()
         if self.combat_pressure_active and active_raid_target is not None:
@@ -2800,9 +2997,11 @@ class CoreFarmer:
             self.stationary_unit_target_id = None
             combat_target = None
             observer_position = None
-            self.combat_pressure_active = True
+            self._refresh_threat_assessment(
+                turn,
+                local_squad_contact=True,
+            )
         enemy_cells = {enemy.position for enemy in enemies}
-        self.known_obstacles.update(turn.obstacle_cells)
         danger_cells = _enemy_threat_cells(enemies, self.known_obstacles)
         self.last_danger_cells = danger_cells
         discouraged_core_cells = {
@@ -3813,6 +4012,13 @@ class CoreFarmer:
         core_survival_margin = core.hp - projected_hp_damage
         self.last_projected_core_damage = projected_core_damage
         self.last_core_survival_margin = core_survival_margin
+        if _is_multi_axis_breakout(
+            core.position,
+            enemies,
+            context.obstacles,
+            self._core_blocked_cells(turn, context),
+        ):
+            self._refresh_threat_assessment(turn, breakout=True)
         if core.view.state is CoreState.MOVING:
             if (
                 self.compatibility_hold
@@ -4341,6 +4547,9 @@ def _position_diagnostics(turn: Turn, tactic: CoreFarmer) -> str:
         f"upkeep_damage={upkeep_damage} "
         f"visible_enemies={len(turn.visible_enemies)} "
         f"enemy_types={_format_counts(enemy_counts)} "
+        f"global_posture={tactic.threat_assessment.global_posture.value} "
+        f"threat_level={tactic.threat_assessment.level.value} "
+        f"threat_reason={tactic.threat_assessment.primary_reason} "
         f"stationary_core_memory={len(tactic.stationary_core_memory)} "
         f"clear_core_target={str(tactic.isolated_core_target_id)[:8] if tactic.isolated_core_target_id else 'none'} "
         f"core_spotter={str(tactic.core_raid_spotter_id)[:8] if tactic.core_raid_spotter_id else 'none'} "
@@ -4415,6 +4624,9 @@ def _systemd_status(turn: Turn, tactic: CoreFarmer, accepted_tick: int) -> str:
         f"{turn.resource_capacity}; workers {len(turn.workers)}; "
         f"fleet {len(turn.vanguards)}v/{len(turn.rangers)}r; "
         f"phase {tactic.strategy_phase(turn)}; {core_status}; "
+        f"posture {tactic.threat_assessment.global_posture.value}; "
+        f"threat {tactic.threat_assessment.level.value}; "
+        f"threat_reason {tactic.threat_assessment.primary_reason}; "
         f"recovery {int(tactic.recovery_mode)}; "
         f"danger {len(tactic.last_danger_cells)}; "
         f"enemies {len(turn.visible_enemies)}; {core_health}; "

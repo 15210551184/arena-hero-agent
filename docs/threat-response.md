@@ -16,7 +16,31 @@ it does not call a language model or rewrite itself while the game is live.
 7. No raid continues through local combat pressure merely because the original
    target still exists.
 
-## Core States
+## Hierarchical Controller
+
+The controller does not flatten every combination into one giant state enum.
+It keeps three layers independent so, for example, recovery can coexist with an
+active attack without either fact being lost:
+
+| Layer | States | Purpose |
+| --- | --- | --- |
+| Lifecycle | `ACTIVE`, `RESPAWNING`, `COMPATIBILITY_HOLD`, `RECOVERY` | Applies fail-closed operational constraints. |
+| Threat | `NORMAL`, `ALERT`, `PRE_EVADE`, `ENGAGED`, `BREAKOUT` | Selects preparation, defense, or escape behavior. |
+| Mission | economy, guard, Scout, observer, raid, disengage, return, heal | Keeps local Unit work subordinate to the first two layers. |
+
+`ThreatAssessment` stores the orthogonal evidence: recent attacks, active and
+approaching enemy IDs, confirmed pursuit, current Core attackers, nearby combat
+Units, local squad contact, disengage memory, and post-threat caution. Its
+`global_posture` is only a compact operational summary. Consumers that make
+safety decisions continue to read the underlying facts, so
+`COMPATIBILITY_HOLD + ENGAGED` still permits an emergency retreat and
+`RECOVERY + PRE_EVADE` still blocks unsafe production.
+
+The structured log exposes `global_posture`, `threat_level`, and
+`threat_reason`. The systemd status line exposes the same summary as `posture`,
+`threat`, and `threat_reason`.
+
+## Threat Levels
 
 | State | Entry | Immediate behavior | Exit or escalation |
 | --- | --- | --- | --- |
@@ -25,11 +49,22 @@ it does not call a language model or rewrite itself while the game is live.
 | `PRE_EVADE` | Estimated time to enemy attack range is at most 16 Ticks, a pursuit is confirmed, or an enemy is within the 12-cell fallback radius. | Start or preserve the safest viable Core migration. Do not cancel it for routine cargo, repair, or healing. | Returns to `ALERT` after the approach memory expires, or escalates on attack. |
 | `ENGAGED` | Core/fleet attack event, or a visible enemy has a current legal attack on the Core. | Counterfire with legal defenders, retain attacker positions for exactly six planning Ticks, and continue a non-worsening emergency migration. | Falls back only after attack memory expires and no other alert remains. |
 | `BREAKOUT` | Multiple threat axes leave no direction that strictly increases distance from every enemy. | Choose the legal destination with the least current projected damage, then maximize the sorted enemy-distance vector. A lower-damage cell is allowed even when one enemy becomes closer. | Re-evaluate every Turn; cancel only for a hard block or a destination with worse projected damage/risk. |
-| `RECOVERY` | Same-Tick Core replacement or inferred remote low-fleet reset. | Clear old battlefield memory, rebuild locally, and avoid advertising the replacement Core on the Beacon route. | Ends after the recovery time, fleet, and stock conditions are satisfied. |
 
 `ALERT` deliberately does not move the Core for a distant lateral or retreating
 enemy. The Core is four times slower than Units, so an approaching track uses a
 time-to-range trigger instead of waiting only for the 12-cell fallback.
+Merely seeing a distant stationary combat Unit, or retaining a conservative
+post-threat caution timer, does not by itself create an activity alert.
+
+## Lifecycle Overlays
+
+- `RESPAWNING` queues no invented actions while the authoritative Turn lacks a
+  Core.
+- `COMPATIBILITY_HOLD` stops raids, ordinary migration, and production but
+  retains legal harvesting, deposits, healing, shield repair, and emergency
+  evasion.
+- `RECOVERY` clears battlefield memory, rebuilds locally after a replacement
+  Core, and remains compatible with simultaneous threat classification.
 
 ## Multi-Axis Breakout
 
@@ -168,3 +203,6 @@ mutate. Optimization is an offline release process:
 
 A model can summarize logs or propose candidate changes outside the Tick loop.
 It is optional and never has authority to publish an untested live strategy.
+The current runtime optimizer intentionally changes only an allow-listed
+economic profile; expansion into combat parameters requires replay and shadow
+evaluation first.

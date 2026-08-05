@@ -15,7 +15,10 @@ from arena_hero import Accepted, CommandPlan, Direction, PlayerState, Received, 
 
 from arena_farmer import (
     CoreFarmer,
+    GlobalPosture,
+    LifecycleMode,
     ResourceLedgerSnapshot,
+    ThreatLevel,
     _emit_resource_ledger,
     _enemy_threat_cells,
     _is_turn_scoped_api_error,
@@ -286,9 +289,20 @@ class CoreFarmerTests(unittest.TestCase):
         ]
 
     def test_respawning_queues_no_actions(self) -> None:
-        queued = plan(make_turn(core=False))
+        turn = make_turn(core=False)
+        tactic = CoreFarmer()
+        tactic.choose_actions(turn)
+        queued = turn.plan.model_dump(mode="json", exclude_none=True)
         self.assertEqual(queued["unit_actions"], {})
         self.assertNotIn("core_action", queued)
+        self.assertEqual(
+            tactic.threat_assessment.lifecycle,
+            LifecycleMode.RESPAWNING,
+        )
+        self.assertEqual(
+            tactic.threat_assessment.global_posture,
+            GlobalPosture.RESPAWNING,
+        )
 
     def test_worker_harvests_and_deposits(self) -> None:
         harvesting = plan(
@@ -1031,6 +1045,14 @@ class CoreFarmerTests(unittest.TestCase):
 
         queued = turn.plan.model_dump(mode="json", exclude_none=True)
         self.assertTrue(tactic.compatibility_hold)
+        self.assertEqual(
+            tactic.threat_assessment.lifecycle,
+            LifecycleMode.COMPATIBILITY_HOLD,
+        )
+        self.assertEqual(
+            tactic.threat_assessment.global_posture,
+            GlobalPosture.COMPATIBILITY_HOLD,
+        )
         self.assertEqual(queued["unit_actions"][WORKER_1]["type"], "HARVEST")
         self.assertEqual(queued["unit_actions"][WORKER_2]["type"], "DEPOSIT")
         self.assertEqual(queued["core_action"]["type"], "WAIT")
@@ -1097,6 +1119,11 @@ class CoreFarmerTests(unittest.TestCase):
             )
             tactic.choose_actions(threatened)
 
+        self.assertEqual(tactic.threat_assessment.level, ThreatLevel.ENGAGED)
+        self.assertEqual(
+            tactic.threat_assessment.global_posture,
+            GlobalPosture.COMPATIBILITY_HOLD,
+        )
         self.assertEqual(
             threatened.plan.model_dump(mode="json", exclude_none=True)[
                 "core_action"
@@ -1515,6 +1542,11 @@ class CoreFarmerTests(unittest.TestCase):
         queued = turn.plan.model_dump(mode="json", exclude_none=True)
         self.assertTrue(tactic.recovery_mode)
         self.assertEqual(tactic.recovery_reason, "CORE_RESPAWNED")
+        self.assertEqual(tactic.threat_assessment.lifecycle, LifecycleMode.RECOVERY)
+        self.assertEqual(
+            tactic.threat_assessment.global_posture,
+            GlobalPosture.RECOVERY,
+        )
         self.assertEqual(queued["core_action"]["type"], "SPAWN")
         self.assertEqual(queued["core_action"]["unit_type"], "WORKER")
 
@@ -1553,6 +1585,12 @@ class CoreFarmerTests(unittest.TestCase):
         queued = turn.plan.model_dump(mode="json", exclude_none=True)
 
         self.assertTrue(tactic.recovery_mode)
+        self.assertEqual(tactic.threat_assessment.lifecycle, LifecycleMode.RECOVERY)
+        self.assertEqual(tactic.threat_assessment.level, ThreatLevel.PRE_EVADE)
+        self.assertEqual(
+            tactic.threat_assessment.global_posture,
+            GlobalPosture.RECOVERY,
+        )
         self.assertNotEqual(
             queued.get("core_action", {}).get("unit_type"),
             "WORKER",
@@ -2897,6 +2935,9 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertIn("upkeep_damage=1", diagnostics)
         self.assertIn("projected_core_damage=0", diagnostics)
         self.assertIn("core_survival_margin=5", diagnostics)
+        self.assertIn("global_posture=NORMAL", diagnostics)
+        self.assertIn("threat_level=NORMAL", diagnostics)
+        self.assertIn("threat_reason=NONE", diagnostics)
 
     def test_nearby_combat_unit_protects_core_from_raid(self) -> None:
         tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
@@ -3366,6 +3407,8 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertEqual(tactic.active_enemy_ids, {UUID(ENEMY_1)})
         self.assertEqual(tactic.preemptive_evade_enemy_ids, {UUID(ENEMY_1)})
         self.assertTrue(tactic.combat_pressure_active)
+        self.assertEqual(tactic.threat_assessment.level, ThreatLevel.PRE_EVADE)
+        self.assertEqual(tactic.threat_assessment.primary_reason, "TIME_TO_RANGE")
         self.assertEqual(
             tactic.last_retreat_direction is not None,
             True,
@@ -3404,6 +3447,15 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertEqual(tactic.active_enemy_ids, {UUID(ENEMY_1)})
         self.assertEqual(tactic.preemptive_evade_enemy_ids, set())
         self.assertTrue(tactic.combat_pressure_active)
+        self.assertEqual(tactic.threat_assessment.level, ThreatLevel.ALERT)
+        self.assertEqual(
+            tactic.threat_assessment.primary_reason,
+            "HOSTILE_ACTIVITY",
+        )
+        self.assertEqual(
+            tactic.threat_assessment.global_posture,
+            GlobalPosture.ALERT,
+        )
         self.assertEqual(queued["core_action"]["type"], "WAIT")
 
     def test_distant_stationary_enemy_does_not_pause_production(self) -> None:
@@ -3421,6 +3473,7 @@ class CoreFarmerTests(unittest.TestCase):
         queued = turn.plan.model_dump(mode="json", exclude_none=True)
         self.assertEqual(tactic.active_enemy_ids, set())
         self.assertFalse(tactic.combat_pressure_active)
+        self.assertEqual(tactic.threat_assessment.level, ThreatLevel.NORMAL)
         self.assertEqual(queued["core_action"]["type"], "SPAWN")
         self.assertEqual(queued["core_action"]["unit_type"], "WORKER")
 
@@ -3456,6 +3509,15 @@ class CoreFarmerTests(unittest.TestCase):
         queued = turn.plan.model_dump(mode="json", exclude_none=True)
 
         self.assertEqual(tactic.last_projected_core_damage, 4)
+        self.assertEqual(tactic.threat_assessment.level, ThreatLevel.BREAKOUT)
+        self.assertEqual(
+            tactic.threat_assessment.primary_reason,
+            "MULTI_AXIS_BREAKOUT",
+        )
+        self.assertEqual(
+            tactic.threat_assessment.global_posture,
+            GlobalPosture.BREAKOUT,
+        )
         self.assertEqual(queued["core_action"]["type"], "START_MOVE")
 
     def test_multi_axis_guards_split_across_threat_sides(self) -> None:
@@ -3618,6 +3680,11 @@ class CoreFarmerTests(unittest.TestCase):
 
         self.assertTrue(tactic.combat_pressure_active)
         self.assertEqual(len(tactic.recent_attack_threats), 1)
+        self.assertEqual(tactic.threat_assessment.level, ThreatLevel.ENGAGED)
+        self.assertEqual(
+            tactic.threat_assessment.primary_reason,
+            "RECENT_CORE_ATTACK",
+        )
         self.assertEqual(queued["core_action"]["type"], "START_MOVE")
 
     def test_remote_worker_attack_recalls_defense_without_moving_core(self) -> None:
@@ -3648,6 +3715,11 @@ class CoreFarmerTests(unittest.TestCase):
         queued = attacked.plan.model_dump(mode="json", exclude_none=True)
 
         self.assertTrue(tactic.combat_pressure_active)
+        self.assertEqual(tactic.threat_assessment.level, ThreatLevel.ENGAGED)
+        self.assertEqual(
+            tactic.threat_assessment.primary_reason,
+            "RECENT_FLEET_ATTACK",
+        )
         self.assertNotEqual(queued.get("core_action", {}).get("type"), "START_MOVE")
 
     def test_attack_memory_keeps_only_geometrically_possible_attackers(self) -> None:
@@ -3796,6 +3868,11 @@ class CoreFarmerTests(unittest.TestCase):
             {UUID(VANGUARD_2), UUID(RANGER_2)},
         )
         self.assertTrue(tactic.combat_pressure_active)
+        self.assertEqual(tactic.threat_assessment.level, ThreatLevel.ENGAGED)
+        self.assertEqual(
+            tactic.threat_assessment.primary_reason,
+            "LOCAL_SQUAD_CONTACT",
+        )
         self.assertEqual(queued["unit_actions"][VANGUARD_2]["type"], "SWEEP")
         self.assertEqual(queued["unit_actions"][RANGER_2]["type"], "SHOOT")
         self.assertNotEqual(queued["core_action"]["type"], "START_MOVE")
@@ -3983,9 +4060,13 @@ class EventLoopTests(unittest.TestCase):
 
     def test_respawning_systemd_status_does_not_dereference_core(self) -> None:
         turn = make_turn(core=False)
-        status = _systemd_status(turn, CoreFarmer(), turn.tick)
+        tactic = CoreFarmer()
+        tactic.choose_actions(turn)
+        status = _systemd_status(turn, tactic, turn.tick)
         self.assertIn("core respawning", status)
         self.assertIn("core_hp none", status)
+        self.assertIn("posture RESPAWNING", status)
+        self.assertIn("threat NORMAL", status)
 
     def test_play_submits_respawning_turn_without_status_crash(self) -> None:
         class FakeGame:

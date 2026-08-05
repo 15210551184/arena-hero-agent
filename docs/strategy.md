@@ -24,6 +24,9 @@ compared over equivalent windows.
 ## Core Safety
 
 - The Core is the highest-value object and is never intentionally self-destructed.
+- Runtime decisions use independent lifecycle, threat, and mission layers.
+  `global_posture` is a diagnostic summary rather than a replacement for the
+  underlying attack, pursuit, recovery, and compatibility facts.
 - With the default `retreat` policy, migration candidates favor directions away from the Beacon and visible threats.
 - Guards are distributed around the Core instead of stacking on its cell or blocking Worker routes.
 - Any observed Vanguard/Ranger movement enters a short alert that recalls missions, pauses expansion production, and reorients defenders. Lateral activity does not move the Core by itself.
@@ -65,6 +68,12 @@ compared over equivalent windows.
 ## Current Optimization Priority
 
 The strategy currently has focused unit tests and structured diagnostics for economy stalls, blocking, Core survival, scouting coverage, combat pressure, lifecycle events, and unexplained resource loss. New tuning should be driven by a captured unhealthy window rather than by increasing fleet size or adding a model to the Tick loop.
+
+The first hierarchical-controller stage is implemented: every planned Turn now
+records `global_posture`, `threat_level`, and a deterministic `threat_reason`.
+The next stages are a shared two-horizon action-risk evaluator, persistent squad
+missions, visibility-aware cover postures, generated scenario tests, and only
+then shadow evaluation of additional allow-listed parameters.
 
 The complete threat states, engagement boundaries, multi-axis breakout scoring,
 visibility assumptions, and offline optimization contract are documented in

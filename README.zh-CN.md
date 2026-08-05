@@ -6,7 +6,7 @@
 [![发布镜像](https://github.com/Drew-Z/arena-hero-agent/actions/workflows/release.yml/badge.svg)](https://github.com/Drew-Z/arena-hero-agent/actions/workflows/release.yml)
 [![许可证](https://img.shields.io/github/license/Drew-Z/arena-hero-agent)](LICENSE)
 
-这是一个面向 [Arena Hero](https://doc.arenahero.io/zh-Hans/) 的确定性、资源优先长期运行 Agent。项目使用官方 `arena-hero` Python SDK，可在本地、Docker 或 Linux systemd 环境运行。
+这是一个面向 [Arena Hero](https://doc.arenahero.io/zh-Hans/) 的确定性、资源优先长期运行 Agent。项目采用分层威胁控制器和官方 `arena-hero` Python SDK，可在本地、Docker 或 Linux systemd 环境运行。
 
 这是社区项目，并非 Arena Hero 官方产品。
 
@@ -14,6 +14,7 @@
 
 - 人口规划固定为 `12 Worker + 3 Vanguard + 4 Ranger = 19`，避免达到 20 人后触发资源惩罚。
 - Core 主动远离信标，以采集和生存为主，同时让防卫单位分层保护，避免堵塞 Core 路线。
+- 将生命周期、威胁等级和单位任务独立分类，覆盖活动警戒、提前撤离、交战、多轴突围和远征队归队。
 - 对地图陈旧区域进行侦察，记忆资源点，安排返程交付，并在损失后回收掉落资源。
 - 遇到活跃敌方舰队时优先拉扯避战；对确认静止且孤立的威胁或 Core 执行有限清除。
 - 定时检测游戏规则和 SDK 版本，发现不兼容时进入保守模式。
