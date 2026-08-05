@@ -24,7 +24,8 @@
 - Python 3.11 或更高版本
 - Arena Hero API key
 - Docker 部署需要 Docker Compose v2
-- 服务器无人值守部署需要 systemd Linux
+- 服务器无人值守部署需要 GNU/Linux 和 systemd 235+；systemd 247+ 才能完整
+  应用全部单元安全隔离配置
 
 当前验证的协议是 API `v0.1`、玩法规则 `v0.13`、官方 Python SDK `0.2.8`。
 
@@ -88,7 +89,9 @@ sudo journalctl -fu arena-hero-agent.service -o short-iso-precise
 ```
 
 Ubuntu 22.04 默认是 Python 3.10。请安装系统级 Python 3.11+ 及匹配的
-`venv` 包，并通过 `--python` 指定；详见[部署文档](docs/deployment.md#linux-systemd-server)。
+`venv` 包，并通过 `--python` 指定；Debian、Ubuntu、RHEL/Alma/Rocky、
+Fedora、Arch 和 openSUSE 的差异详见
+[Linux 支持矩阵](docs/deployment.md#linux-systemd-server)。
 
 安装器会隐藏输入 API key，在 `/opt/arena-hero-agent/releases` 下构建不可变
 版本并原子切换 `current` 链接，默认只启用主 Agent 和每六小时一次的版本兼容
@@ -104,9 +107,11 @@ sh scripts/update-systemd.sh
 
 请以仓库所有者身份直接运行，不要在命令前加 `sudo`。更新器只接受已配置
 upstream 的干净分支，获取更新并确认可快进后，先构建、校验新版，再仅对事务
-安装步骤提权。systemd 重启时会先停止旧策略进程，再启动新版，不会并行运行
-两个主 Agent 实例。新版准备期间旧版会继续运行；已有凭据、运行参数和已启用
-的可选组件都会保留，重启或健康检查失败时会自动恢复旧版本。
+安装步骤提权。实际部署内容来自目标 commit 的精确归档，并在 root 专属临时目录
+中构建，不会继续读取正在变化的仓库工作树。systemd 重启时会先停止旧策略进程，
+再启动新版，不会并行运行两个主 Agent 实例。新版准备期间旧版会继续运行；已有
+凭据、运行参数和已启用的可选组件都会保留。重启或健康检查失败时，安装器会
+尝试恢复旧版本，并在自动恢复也失败时明确要求人工检查。
 
 其余组件必须显式开启：
 
@@ -155,7 +160,9 @@ python -m compileall -q arena_farmer.py arena_health.py arena_supervisor.py aren
 python scripts/check_secrets.py
 ```
 
-测试全部使用构造数据，不需要真实 API key，也不会连接线上游戏。
+测试全部使用构造数据，不需要真实 API key，也不会连接线上游戏。CI 在 GitHub
+托管的 Ubuntu 和 Windows 上覆盖 Python 3.11-3.13，并检查镜像构建和 systemd
+单元；这不代表所有 Linux 发行版都完成了真实服务安装认证。
 
 更新依赖时，使用锁文件头部记录的完整 `uv pip compile` 命令重新生成，
 审查依赖差异并完成测试后再提交。

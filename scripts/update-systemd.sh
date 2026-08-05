@@ -7,15 +7,17 @@ INSTALLER=$PROJECT_ROOT/scripts/install-systemd.sh
 GIT_BIN=${ARENA_UPDATE_GIT_BIN:-git}
 SUDO_BIN=${ARENA_UPDATE_SUDO_BIN:-sudo}
 ID_BIN=${ARENA_UPDATE_ID_BIN:-id}
+STAT_BIN=${ARENA_UPDATE_STAT_BIN:-stat}
+SOURCE_ARCHIVE=
 
 usage() {
     cat <<'EOF'
 Usage: sh scripts/update-systemd.sh
 
-Fast-forward the current checkout to its configured upstream, then switch the
-running systemd Agent from the old strategy process to the new strategy. Run
-this command as the checkout owner, without sudo; privilege escalation happens
-only for the transactional install and service restart.
+Fast-forward the current checkout to its configured upstream, archive that exact
+commit, then switch the running systemd Agent from the old strategy process to
+the new strategy. Run this command as the checkout owner, without sudo;
+privilege escalation happens only for isolated deployment and service restart.
 EOF
 }
 
@@ -46,6 +48,10 @@ require_command() {
 
 require_command "$GIT_BIN"
 require_command "$ID_BIN"
+require_command "$STAT_BIN"
+for command_name in chmod mktemp rm tar; do
+    require_command "$command_name"
+done
 current_uid=$("$ID_BIN" -u)
 case "$current_uid" in
     ""|*[!0-9]*)
@@ -70,6 +76,20 @@ if [ "$repository_root" != "$PROJECT_ROOT" ]; then
     echo "Run the updater from the standalone Arena Hero repository root." >&2
     exit 2
 fi
+repository_uid=$("$STAT_BIN" -c '%u' "$repository_root") || {
+    echo "Unable to determine the Git checkout owner." >&2
+    exit 2
+}
+case "$repository_uid" in
+    ""|*[!0-9]*)
+        echo "Unable to determine the Git checkout owner." >&2
+        exit 2
+        ;;
+esac
+if [ "$repository_uid" -ne "$current_uid" ]; then
+    echo "Run this updater as the Git checkout owner (UID $repository_uid), without sudo." >&2
+    exit 2
+fi
 
 working_changes=$("$GIT_BIN" -C "$PROJECT_ROOT" status --porcelain --untracked-files=all)
 if [ -n "$working_changes" ]; then
@@ -86,6 +106,11 @@ upstream=$("$GIT_BIN" -C "$PROJECT_ROOT" rev-parse \
     echo "The current branch has no configured upstream." >&2
     exit 2
 }
+upstream_ref=$("$GIT_BIN" -C "$PROJECT_ROOT" rev-parse \
+    --symbolic-full-name '@{upstream}') || {
+    echo "The configured upstream is not a symbolic remote-tracking branch." >&2
+    exit 2
+}
 remote=$("$GIT_BIN" -C "$PROJECT_ROOT" config --get "branch.$branch.remote") || {
     echo "The current branch has no configured remote." >&2
     exit 2
@@ -96,10 +121,29 @@ case "$remote" in
         exit 2
         ;;
 esac
+merge_ref=$("$GIT_BIN" -C "$PROJECT_ROOT" config --get "branch.$branch.merge") || {
+    echo "The current branch has no configured merge ref." >&2
+    exit 2
+}
+case "$merge_ref" in
+    refs/heads/*) ;;
+    *)
+        echo "The configured upstream merge ref is not a branch." >&2
+        exit 2
+        ;;
+esac
+case "$upstream_ref" in
+    refs/remotes/"$remote"/*) ;;
+    *)
+        echo "The configured upstream is not a supported remote-tracking branch." >&2
+        exit 2
+        ;;
+esac
 
 current_commit=$("$GIT_BIN" -C "$PROJECT_ROOT" rev-parse --verify 'HEAD^{commit}')
 echo "Fetching $upstream for branch $branch."
-"$GIT_BIN" -C "$PROJECT_ROOT" fetch --prune --tags "$remote"
+"$GIT_BIN" -C "$PROJECT_ROOT" fetch --prune "$remote" \
+    "+$merge_ref:$upstream_ref"
 target_commit=$("$GIT_BIN" -C "$PROJECT_ROOT" rev-parse --verify '@{upstream}^{commit}')
 
 if ! "$GIT_BIN" -C "$PROJECT_ROOT" merge-base --is-ancestor \
@@ -111,15 +155,66 @@ fi
 if [ "$current_commit" != "$target_commit" ]; then
     "$GIT_BIN" -C "$PROJECT_ROOT" merge --ff-only "$target_commit"
 fi
+checked_out_commit=$("$GIT_BIN" -C "$PROJECT_ROOT" rev-parse --verify 'HEAD^{commit}')
+if [ "$checked_out_commit" != "$target_commit" ]; then
+    echo "The checkout changed during the update. Retry from a stable worktree." >&2
+    exit 2
+fi
+working_changes=$("$GIT_BIN" -C "$PROJECT_ROOT" status --porcelain --untracked-files=all)
+if [ -n "$working_changes" ]; then
+    echo "The Git worktree changed during the update. Retry after resolving local changes." >&2
+    exit 2
+fi
+
+cleanup() {
+    if [ -n "$SOURCE_ARCHIVE" ]; then
+        rm -f -- "$SOURCE_ARCHIVE"
+    fi
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
+SOURCE_ARCHIVE=$(mktemp "${TMPDIR:-/tmp}/arena-hero-update.XXXXXX.tar")
+chmod 0600 "$SOURCE_ARCHIVE"
+"$GIT_BIN" -C "$PROJECT_ROOT" archive --format=tar \
+    --output "$SOURCE_ARCHIVE" "$target_commit"
 deployed_commit=$("$GIT_BIN" -C "$PROJECT_ROOT" rev-parse --short=12 "$target_commit")
 echo "Deploying source commit $deployed_commit."
 
+INSTALL_ARCHIVE_COMMAND='
+set -eu
+archive=$1
+commit=$2
+case "$commit" in
+    ""|*[!0-9a-fA-F]*) echo "Invalid archived Git commit: $commit" >&2; exit 2 ;;
+esac
+stage=$(mktemp -d /var/tmp/arena-hero-update.XXXXXX)
+case "$stage" in
+    /var/tmp/arena-hero-update.*) ;;
+    *) echo "Unsafe privileged staging path: $stage" >&2; exit 2 ;;
+esac
+cleanup_stage() {
+    rm -rf -- "$stage"
+}
+trap cleanup_stage EXIT
+trap "exit 1" HUP INT TERM
+tar -xf "$archive" -C "$stage"
+if [ ! -r "$stage/scripts/install-systemd.sh" ]; then
+    echo "The archived commit does not contain the systemd installer." >&2
+    exit 2
+fi
+ARENA_HERO_API_KEY= ARENA_SOURCE_COMMIT="$commit" \
+    sh "$stage/scripts/install-systemd.sh"
+'
+
 run_installer() {
     if [ "$current_uid" -eq 0 ]; then
-        ARENA_HERO_API_KEY= sh "$INSTALLER"
+        ARENA_HERO_API_KEY= sh -c "$INSTALL_ARCHIVE_COMMAND" \
+            arena-hero-update "$SOURCE_ARCHIVE" "$target_commit"
     else
         require_command "$SUDO_BIN"
-        "$SUDO_BIN" env ARENA_HERO_API_KEY= sh "$INSTALLER"
+        "$SUDO_BIN" env ARENA_HERO_API_KEY= sh -c "$INSTALL_ARCHIVE_COMMAND" \
+            arena-hero-update "$SOURCE_ARCHIVE" "$target_commit"
     fi
 }
 
@@ -129,6 +224,6 @@ if run_installer; then
     echo "Follow logs with: sudo journalctl -fu arena-hero-agent.service -o short-iso-precise"
 else
     status=$?
-    echo "Update deployment failed with exit code $status; the installer kept or restored the previous active release." >&2
+    echo "Update deployment failed with exit code $status. Review the installer diagnostics, current/previous release links, and systemd status." >&2
     exit "$status"
 fi

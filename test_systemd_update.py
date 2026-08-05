@@ -30,11 +30,14 @@ class SystemdUpdateTests(unittest.TestCase):
         self.sudo_log = self.root / "sudo.log"
         self.installer_log = self.root / "installer.log"
         self.merge_marker = self.root / "merge-target.txt"
+        self.archive_dir = self.root / "archives"
+        self.archive_dir.mkdir()
         self._write_fake_commands()
         self._write_executable(
             self.scripts / "install-systemd.sh",
             r'''#!/bin/sh
 printf 'key=%s\n' "${ARENA_HERO_API_KEY-unset}" > "$FAKE_INSTALLER_LOG"
+printf 'commit=%s\n' "${ARENA_SOURCE_COMMIT-unset}" >> "$FAKE_INSTALLER_LOG"
 exit "${FAKE_INSTALLER_EXIT:-0}"
 ''',
         )
@@ -45,11 +48,13 @@ exit "${FAKE_INSTALLER_EXIT:-0}"
                 "ARENA_UPDATE_GIT_BIN": str(self.fake_bin / "git"),
                 "ARENA_UPDATE_SUDO_BIN": str(self.fake_bin / "sudo"),
                 "ARENA_UPDATE_ID_BIN": str(self.fake_bin / "id"),
+                "ARENA_UPDATE_STAT_BIN": str(self.fake_bin / "stat"),
                 "FAKE_PROJECT_ROOT": str(self.project),
                 "FAKE_GIT_LOG": str(self.git_log),
                 "FAKE_SUDO_LOG": str(self.sudo_log),
                 "FAKE_INSTALLER_LOG": str(self.installer_log),
                 "FAKE_MERGE_MARKER": str(self.merge_marker),
+                "TMPDIR": str(self.archive_dir),
                 "FAKE_CURRENT_COMMIT": "1111111111111111111111111111111111111111",
                 "FAKE_TARGET_COMMIT": "2222222222222222222222222222222222222222",
             }
@@ -80,7 +85,14 @@ case "$command_name" in
         case "$*" in
             --show-toplevel) printf '%s\n' "$FAKE_PROJECT_ROOT" ;;
             '--abbrev-ref --symbolic-full-name @{upstream}') printf 'origin/main\n' ;;
-            '--verify HEAD^{commit}') printf '%s\n' "$FAKE_CURRENT_COMMIT" ;;
+            '--symbolic-full-name @{upstream}') printf 'refs/remotes/origin/main\n' ;;
+            '--verify HEAD^{commit}')
+                if [ -e "$FAKE_MERGE_MARKER" ]; then
+                    printf '%s\n' "$FAKE_TARGET_COMMIT"
+                else
+                    printf '%s\n' "$FAKE_CURRENT_COMMIT"
+                fi
+                ;;
             '--verify @{upstream}^{commit}') printf '%s\n' "$FAKE_TARGET_COMMIT" ;;
             '--short=12 '*) printf '%.12s\n' "$FAKE_TARGET_COMMIT" ;;
             *) exit 91 ;;
@@ -93,7 +105,11 @@ case "$command_name" in
         printf 'main\n'
         ;;
     config)
-        printf 'origin\n'
+        case "$*" in
+            '--get branch.main.remote') printf 'origin\n' ;;
+            '--get branch.main.merge') printf 'refs/heads/main\n' ;;
+            *) exit 93 ;;
+        esac
         ;;
     fetch)
         exit "${FAKE_FETCH_EXIT:-0}"
@@ -103,6 +119,11 @@ case "$command_name" in
         ;;
     merge)
         printf '%s\n' "$FAKE_TARGET_COMMIT" > "$FAKE_MERGE_MARKER"
+        ;;
+    archive)
+        [ "${1:-}" = "--format=tar" ] || exit 94
+        [ "${2:-}" = "--output" ] || exit 94
+        tar -cf "$3" -C "$FAKE_PROJECT_ROOT" scripts/install-systemd.sh
         ;;
     *)
         exit 92
@@ -114,12 +135,19 @@ esac
             self.fake_bin / "sudo",
             r'''#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_SUDO_LOG"
+if [ "${FAKE_MUTATE_CHECKOUT_INSTALLER:-0}" = "1" ]; then
+    printf '#!/bin/sh\nexit 88\n' > "$FAKE_PROJECT_ROOT/scripts/install-systemd.sh"
+fi
 exec "$@"
 ''',
         )
         self._write_executable(
             self.fake_bin / "id",
             "#!/bin/sh\nif [ \"${1:-}\" = \"-u\" ]; then echo 1000; fi\n",
+        )
+        self._write_executable(
+            self.fake_bin / "stat",
+            "#!/bin/sh\nprintf '%s\\n' \"${FAKE_REPOSITORY_UID:-1000}\"\n",
         )
 
     def _run(
@@ -143,7 +171,10 @@ exec "$@"
         result = self._run(env=env)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.installer_log.read_text(encoding="utf-8"), "key=\n")
+        self.assertEqual(
+            self.installer_log.read_text(encoding="utf-8"),
+            f"key=\ncommit={self.env['FAKE_TARGET_COMMIT']}\n",
+        )
         self.assertEqual(
             self.merge_marker.read_text(encoding="utf-8").strip(),
             self.env["FAKE_TARGET_COMMIT"],
@@ -151,6 +182,24 @@ exec "$@"
         self.assertNotIn("must-not-reach-installer", result.stdout + result.stderr)
         self.assertIn("the new strategy is running", result.stdout)
         self.assertIn("stopped any previous strategy process", result.stdout)
+        self.assertEqual(list(self.archive_dir.iterdir()), [])
+        git_calls = self.git_log.read_text(encoding="utf-8")
+        self.assertIn(
+            "fetch --prune origin +refs/heads/main:refs/remotes/origin/main",
+            git_calls,
+        )
+
+    def test_deploys_archived_commit_when_checkout_changes_before_sudo(self) -> None:
+        env = self.env | {"FAKE_MUTATE_CHECKOUT_INSTALLER": "1"}
+
+        result = self._run(env=env)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.installer_log.read_text(encoding="utf-8"),
+            f"key=\ncommit={self.env['FAKE_TARGET_COMMIT']}\n",
+        )
+        self.assertIn("exit 88", (self.scripts / "install-systemd.sh").read_text())
 
     def test_current_upstream_is_redeployed_without_merge(self) -> None:
         env = self.env | {
@@ -189,7 +238,18 @@ exec "$@"
         result = self._run(env=env)
 
         self.assertEqual(result.returncode, 75)
-        self.assertIn("kept or restored the previous active release", result.stderr)
+        self.assertIn("Review", result.stderr)
+        self.assertNotIn("kept or restored", result.stderr)
+
+    def test_checkout_owner_mismatch_stops_before_fetch_or_install(self) -> None:
+        env = self.env | {"FAKE_REPOSITORY_UID": "2000"}
+
+        result = self._run(env=env)
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("checkout owner", result.stderr)
+        self.assertNotIn("fetch", self.git_log.read_text(encoding="utf-8"))
+        self.assertFalse(self.installer_log.exists())
 
     def test_help_rejects_extra_arguments(self) -> None:
         result = self._run("--help", "--python")

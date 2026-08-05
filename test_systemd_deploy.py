@@ -118,6 +118,7 @@ class SystemdDeploymentTests(unittest.TestCase):
         self.fake_bin = self.root / "fake-bin"
         self.fake_bin.mkdir()
         self.systemctl_log = self.root / "systemctl.log"
+        self.account_log = self.root / "account.log"
         self.key_file = self.root / "arena-key.txt"
         self.key_file.write_text("test-credential-value\n", encoding="utf-8")
         self._write_fake_commands()
@@ -148,6 +149,8 @@ class SystemdDeploymentTests(unittest.TestCase):
                 "ARENA_HEALTH_ATTEMPTS": "1",
                 "ARENA_HEALTH_INTERVAL": "0",
                 "FAKE_SYSTEMCTL_LOG": str(self.systemctl_log),
+                "FAKE_ACCOUNT_LOG": str(self.account_log),
+                "FAKE_SYSTEMD_VERSION": "252",
             }
         )
 
@@ -230,6 +233,10 @@ exit 0
             self.fake_bin / "systemctl",
             r'''#!/bin/sh
 set -eu
+if [ "${1:-}" = "--version" ]; then
+    printf 'systemd %s (test)\n' "${FAKE_SYSTEMD_VERSION:-252}"
+    exit 0
+fi
 printf '%s\n' "$*" >> "$FAKE_SYSTEMCTL_LOG"
 if [ "${1:-}" = "is-active" ] || [ "${1:-}" = "is-enabled" ]; then
     exit 1
@@ -266,10 +273,21 @@ exit 0
         )
         self._write_executable(
             self.fake_bin / "id",
-            "#!/bin/sh\nif [ \"${1:-}\" = \"-u\" ]; then echo 0; fi\nexit 0\n",
+            "#!/bin/sh\nif [ \"${1:-}\" = \"-u\" ]; then echo 0; exit 0; fi\nexit 1\n",
         )
         self._write_executable(self.fake_bin / "chown", "#!/bin/sh\nexit 0\n")
-        self._write_executable(self.fake_bin / "useradd", "#!/bin/sh\nexit 0\n")
+        self._write_executable(
+            self.fake_bin / "getent",
+            "#!/bin/sh\nexit 1\n",
+        )
+        self._write_executable(
+            self.fake_bin / "groupadd",
+            "#!/bin/sh\nprintf 'groupadd %s\\n' \"$*\" >> \"$FAKE_ACCOUNT_LOG\"\n",
+        )
+        self._write_executable(
+            self.fake_bin / "useradd",
+            "#!/bin/sh\nprintf 'useradd %s\\n' \"$*\" >> \"$FAKE_ACCOUNT_LOG\"\n",
+        )
         self._write_executable(
             self.fake_bin / "install",
             f'''#!{sys.executable}
@@ -357,9 +375,72 @@ os.execv("/usr/bin/install", ["install", *args])
         result = self._install("--no-start", env=env)
 
         self.assertEqual(result.returncode, 2)
-        self.assertIn("install the matching package", result.stderr)
+        self.assertIn("Install its matching venv/pip package", result.stderr)
         self.assertIn("python3.11-venv", result.stderr)
         self.assertFalse(self.install_root.exists())
+
+    def test_rejects_systemd_older_than_operational_minimum(self) -> None:
+        env = self.env | {"FAKE_SYSTEMD_VERSION": "234"}
+
+        result = self._install("--no-start", env=env)
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("systemd 235 or newer is required", result.stderr)
+        self.assertFalse(self.install_root.exists())
+
+    def test_warns_when_systemd_lacks_full_hardening(self) -> None:
+        env = self.env | {"FAKE_SYSTEMD_VERSION": "239"}
+
+        result = self._install("--no-start", env=env)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("isolation directives require systemd 247+", result.stderr)
+
+    def test_creates_explicit_same_name_service_groups(self) -> None:
+        result = self._install("--no-start")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.account_log.read_text(encoding="utf-8").splitlines()
+        self.assertIn("groupadd --system arena-hero", calls)
+        self.assertIn("groupadd --system arena-hero-version", calls)
+        self.assertTrue(
+            any(
+                call.startswith("useradd ")
+                and "--gid arena-hero arena-hero" in call
+                for call in calls
+            )
+        )
+
+    def test_records_valid_source_commit_in_immutable_release(self) -> None:
+        source_commit = "a" * 40
+        env = self.env | {"ARENA_SOURCE_COMMIT": source_commit}
+
+        result = self._install("--no-start", env=env)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        release = self._resolved("current")
+        self.assertEqual(
+            (release / "source-commit").read_text(encoding="utf-8"),
+            f"{source_commit}\n",
+        )
+
+    def test_rejects_invalid_source_commit_before_host_changes(self) -> None:
+        env = self.env | {"ARENA_SOURCE_COMMIT": "not-a-git-object"}
+
+        result = self._install("--no-start", env=env)
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("ARENA_SOURCE_COMMIT", result.stderr)
+        self.assertFalse(self.install_root.exists())
+        self.assertFalse(self.account_log.exists())
+
+    def test_supervisor_journal_group_is_preflighted_before_account_changes(self) -> None:
+        result = self._install("--with-supervisor", "--no-start")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("systemd-journal group is required", result.stderr)
+        self.assertFalse(self.install_root.exists())
+        self.assertFalse(self.account_log.exists())
 
     def test_install_upgrade_and_rollback_swap_immutable_releases(self) -> None:
         first = self._install("--no-start")

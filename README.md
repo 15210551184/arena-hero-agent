@@ -36,7 +36,8 @@ flowchart LR
 - Python 3.11 or newer
 - An Arena Hero API key
 - Docker Compose v2 for the container path
-- A systemd-based Linux server for the unattended server path
+- A GNU/Linux server with systemd 235+ for the unattended server path; systemd
+  247+ applies the complete unit hardening policy
 
 The tested contract is API `v0.1`, gameplay `v0.13`, and official Python SDK `0.2.8`. The bundled version monitor fails closed when it detects an incompatible contract.
 
@@ -101,7 +102,8 @@ sudo journalctl -fu arena-hero-agent.service -o short-iso-precise
 
 Ubuntu 22.04 uses Python 3.10 by default. Install a system-wide Python 3.11+
 with its matching `venv` package and pass it with `--python`; see the
-[deployment guide](docs/deployment.md#linux-systemd-server).
+[Linux support matrix](docs/deployment.md#linux-systemd-server) for Debian,
+Ubuntu, RHEL/Alma/Rocky, Fedora, Arch, and openSUSE guidance.
 
 The installer prompts for the Arena Hero key without echoing it, builds an
 immutable release under `/opt/arena-hero-agent/releases`, atomically updates the
@@ -119,12 +121,14 @@ sh scripts/update-systemd.sh
 
 Run the updater as the checkout owner, without `sudo`. It accepts only a clean
 branch with a configured upstream, fetches and verifies a fast-forward update,
-builds and validates the new release, then elevates only the transactional
-install step. systemd stops the old strategy process during restart before it
-starts the new version, so two main Agent instances do not run in parallel.
+archives the exact target commit, then builds and validates the new release from
+an isolated root-owned staging directory. systemd stops the old strategy process
+during restart before it starts the new version, so two main Agent instances do
+not run in parallel.
 Existing credentials, runtime tuning, and enabled optional components are
 preserved. The previous release remains active while the new release is being
-prepared, and is restored if restart or health validation fails.
+prepared; the installer attempts to restore it if restart or health validation
+fails and reports when recovery itself needs manual intervention.
 
 Optional components are explicit:
 
@@ -187,7 +191,10 @@ python -m compileall -q arena_farmer.py arena_health.py arena_supervisor.py aren
 python scripts/check_secrets.py
 ```
 
-Tests use synthetic UUIDs and do not need an API key or a live game connection. CI runs on Windows and Linux and also validates the container build.
+Tests use synthetic UUIDs and do not need an API key or a live game connection.
+CI runs Python 3.11-3.13 on GitHub-hosted Ubuntu and Windows, and also validates
+the container build and systemd units. This is not a claim that every Linux
+distribution has received a real service installation test.
 
 Regenerate the lock files with the exact `uv pip compile` commands recorded in
 their headers, then review and test the resulting dependency diff before commit.

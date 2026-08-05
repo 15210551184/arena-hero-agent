@@ -114,15 +114,41 @@ ARENA_HERO_AGENT_IMAGE=ghcr.io/drew-z/arena-hero-agent:0.1.0 docker compose up -
 
 ## Linux systemd Server
 
-The installer targets standard GNU/Linux systemd distributions and requires
-root, systemd, Python 3.11+, Python `venv` support, `flock`, GNU `mv`/`readlink`,
-standard account/core utilities, and network access to install Python
-dependencies. On Debian or Ubuntu whose default Python is already 3.11 or
-newer, install the common prerequisites with:
+The installer targets GNU/Linux systemd distributions. It requires root,
+systemd 235+, Python 3.11+ with `venv` and pip, Git and tar for one-command
+updates, `flock`, GNU coreutils, util-linux, shadow account tools, and network
+access to install hash-locked Python dependencies.
+
+The installer reads `systemctl --version` before changing the host. Versions
+below 235 are rejected because required service state-directory behavior is not
+available. systemd 235-246 can run the services, but the installer warns that
+some process and kernel isolation directives are unavailable. systemd 247+ is
+the full-hardening baseline.
+
+| Distribution family | Installation status |
+| --- | --- |
+| Debian 12, Ubuntu 24.04 | Direct path when the distribution Python includes `venv` and pip. |
+| Ubuntu 22.04, Debian 11 | systemd is sufficient; install a parallel system-wide Python 3.11+ and select it with `--python`. |
+| RHEL, AlmaLinux, Rocky Linux 9 | systemd is sufficient; the default Python may be older than 3.11, so install and explicitly select Python 3.11+. |
+| Current Fedora, Arch Linux, openSUSE Tumbleweed | Expected to work with current system packages; rolling Python upgrades should be tested before production updates. |
+| openSUSE Leap 15.x | Expected compatibility after installing and selecting the parallel `python311` packages. |
+| RHEL-family 8 and other systemd 235-246 hosts | Compatibility mode only: Python 3.11+ is still required and some hardening directives are unavailable. |
+| RHEL/CentOS 7 and other systemd <235 hosts | Unsupported by the systemd deployment path; use Docker on a supported container host or upgrade the OS. |
+
+The transaction tests run on GitHub-hosted Ubuntu with redirected system paths
+and simulated `systemctl`; CI also performs static unit verification. The table
+is a conservative compatibility policy, not a claim that every listed release
+has completed a real booted-systemd installation test.
+The documented Debian 12 and AlmaLinux 9 dependency sets are additionally
+smoke-tested in clean containers for package resolution, Python `venv`, systemd
+version, and shell parsing; those containers do not boot or start systemd.
+
+On Debian or Ubuntu whose default Python is already 3.11 or newer, install the
+common prerequisites with:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y python3 python3-venv ca-certificates util-linux coreutils
+sudo apt-get install -y git sudo tar python3 python3-venv ca-certificates systemd util-linux coreutils passwd
 ```
 
 Ubuntu 22.04 ships Python 3.10 as `python3`. Provision a system-wide Python
@@ -131,7 +157,7 @@ select it explicitly. For example, if `python3.11` is available from that
 source:
 
 ```bash
-sudo apt-get install -y python3.11 python3.11-venv ca-certificates util-linux coreutils
+sudo apt-get install -y git sudo tar python3.11 python3.11-venv ca-certificates systemd util-linux coreutils passwd
 sudo sh scripts/install-systemd.sh --python "$(command -v python3.11)"
 ```
 
@@ -140,9 +166,33 @@ and `python3.11` and selects the first compatible interpreter. A user-local
 Python must be passed by absolute path and remain executable by the installed
 service accounts; a system-wide interpreter is preferred for systemd.
 
-On RHEL-family systems, install the equivalent Python, pip/venv, systemd, and
-shadow-utils packages. The installer performs its command and `venv` preflight
-before creating service users or writing configuration.
+On RHEL/Alma/Rocky 9, enable an approved repository that provides Python 3.11+
+when necessary, then use the matching package names for that minor release. A
+typical AppStream-based installation is:
+
+```bash
+sudo dnf install -y git sudo tar ca-certificates systemd util-linux shadow-utils python3.11 python3.11-pip
+sudo sh scripts/install-systemd.sh --python "$(command -v python3.11)"
+```
+
+Typical package sets for other current distributions are:
+
+```bash
+# Fedora
+sudo dnf install -y git sudo tar ca-certificates systemd util-linux coreutils shadow-utils python3 python3-pip
+
+# Arch Linux
+sudo pacman -S --needed git sudo tar ca-certificates systemd util-linux coreutils shadow python
+
+# openSUSE (package names can vary by release)
+sudo zypper install git sudo tar ca-certificates systemd util-linux coreutils shadow python311 python311-pip
+```
+
+Verify `python -m venv` works after using the distribution package manager. The
+installer performs command, systemd version, Python version, and `venv` preflight
+before creating service users or writing configuration. It never installs OS
+packages or changes repositories automatically. It creates explicit same-name
+groups before service users, avoiding distribution-specific `useradd` defaults.
 
 ### Default installation
 
@@ -297,11 +347,20 @@ before privilege escalation. The updater does not accept installer or
 credential arguments and clears `ARENA_HERO_API_KEY` for the install step, so an
 unrelated shell variable cannot replace the protected systemd credential.
 
-After Git validation, the updater invokes the transactional installer with no
-configuration overrides. Existing `/etc` credentials, runtime tuning, private
-AI configuration, and enabled optional components are retained. Running the
-command while the checkout is already current still redeploys that commit, which
-is useful when the source checkout is newer than the active instance.
+After Git validation, the updater archives the exact remote-tracking commit and
+extracts it into a root-owned temporary directory before invoking the
+transactional installer with no configuration overrides. The privileged build
+therefore cannot silently consume a later edit or a second updater's checkout.
+Existing `/etc` credentials, runtime tuning, private AI configuration, and
+enabled optional components are retained. Running the command while the checkout
+is already current still redeploys that commit, which is useful when the source
+checkout is newer than the active instance.
+
+The updater records the full object ID in the immutable release. Verify it with:
+
+```bash
+cat /opt/arena-hero-agent/current/source-commit
+```
 
 The old strategy keeps running while the installer builds and validates the new
 immutable release. Activation updates `current` and restarts the single
@@ -319,10 +378,13 @@ Installer, updater, and rollback operations ultimately share the installer's
 non-blocking deployment lock; a concurrent deployment exits without changing
 release links. The installer and rollback command recover a pending release-link
 transaction before reading `current` or `previous`. A failed update leaves the
-old release active or restores it automatically, while preserving the original
-installer exit code. If automatic recovery itself fails, inspect the service and
-release links manually; the updater cannot guarantee which version is active in
-that exceptional state.
+old release active or restores it automatically when recovery succeeds, while
+preserving the original installer exit code. The updater deliberately makes no
+absolute recovery claim after a failed install: read the installer diagnostics
+and inspect the service and release links, because recovery itself can fail in
+an exceptional host or filesystem failure. Runtime recovery does not move the
+source checkout back to its earlier commit; after fixing the host problem,
+running the updater again redeploys the already checked-out target commit.
 
 Before updating, record the installed version and back up the restricted configuration:
 
@@ -348,6 +410,12 @@ release the new `previous`. Running it again switches forward. If the selected
 release fails validation, compatibility, restart, or health checks, the original
 link pair and service are restored. A first installation has no rollback target
 unless a legacy `.venv` was migrated.
+
+Application rollback swaps immutable releases but does not install historical
+systemd unit templates or change the host's Python packages. Unit definitions
+are intentionally stable and point through `current`; a release that changes the
+host-level service contract requires a reviewed installer change in both upgrade
+and downgrade directions.
 
 Releases are not pruned automatically. Keep at least the `current` and
 `previous` targets; delete any older unreferenced release only after resolving

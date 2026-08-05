@@ -15,8 +15,11 @@ SYSTEMD_UNIT_DIR=${ARENA_SYSTEMD_UNIT_DIR:-/etc/systemd/system}
 ROLLBACK_BIN=${ARENA_ROLLBACK_BIN:-/usr/local/sbin/arena-hero-rollback}
 SYSTEMCTL_BIN=${ARENA_SYSTEMCTL_BIN:-systemctl}
 PYTHON_BIN=${PYTHON_BIN:-}
+SOURCE_COMMIT=${ARENA_SOURCE_COMMIT:-}
 HEALTH_ATTEMPTS=${ARENA_HEALTH_ATTEMPTS:-12}
 HEALTH_INTERVAL=${ARENA_HEALTH_INTERVAL:-10}
+MIN_SYSTEMD_VERSION=235
+FULL_HARDENING_SYSTEMD_VERSION=247
 WITH_SUPERVISOR=0
 WITH_OPTIMIZER=0
 DISABLE_SUPERVISOR=0
@@ -157,18 +160,52 @@ select_python() {
     exit 2
 }
 
-for command_name in basename cat chmod chown date dirname flock grep id install ln mktemp mv readlink rm sed sleep tr useradd; do
+check_systemd_version() {
+    version_line=$("$SYSTEMCTL_BIN" --version 2>/dev/null | sed -n '1p') || {
+        echo "Unable to read the installed systemd version." >&2
+        exit 2
+    }
+    set -- $version_line
+    systemd_version=${2:-}
+    if [ "${1:-}" != "systemd" ]; then
+        systemd_version=
+    fi
+    case "$systemd_version" in
+        ""|*[!0-9]*)
+            echo "Unable to parse the installed systemd version: $version_line" >&2
+            exit 2
+            ;;
+    esac
+    if [ "$systemd_version" -lt "$MIN_SYSTEMD_VERSION" ]; then
+        echo "systemd $MIN_SYSTEMD_VERSION or newer is required; found systemd $systemd_version." >&2
+        exit 2
+    fi
+    if [ "$systemd_version" -lt "$FULL_HARDENING_SYSTEMD_VERSION" ]; then
+        echo "Warning: systemd $systemd_version can run the Agent, but some process and kernel isolation directives require systemd $FULL_HARDENING_SYSTEMD_VERSION+." >&2
+    fi
+}
+
+for command_name in basename cat chmod chown date dirname flock getent grep groupadd id install ln mktemp mv readlink rm sed sleep tr useradd; do
     require_command "$command_name"
 done
 if [ "$WITH_SUPERVISOR" -eq 1 ]; then
-    require_command getent
     require_command usermod
 fi
 require_command "$SYSTEMCTL_BIN"
-select_python
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "Run this installer as root (for example, with sudo)." >&2
+    exit 2
+fi
+check_systemd_version
+select_python
+if [ -n "$SOURCE_COMMIT" ] && ! printf '%s\n' "$SOURCE_COMMIT" | \
+    grep -Eq '^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$'; then
+    echo "ARENA_SOURCE_COMMIT must be a full 40- or 64-character Git object ID." >&2
+    exit 2
+fi
+if [ "$WITH_SUPERVISOR" -eq 1 ] && ! getent group systemd-journal >/dev/null 2>&1; then
+    echo "The systemd-journal group is required when enabling the supervisor." >&2
     exit 2
 fi
 
@@ -211,7 +248,7 @@ do
 done
 
 "$PYTHON_BIN" -c 'import tempfile, venv; root = tempfile.TemporaryDirectory(); venv.EnvBuilder(with_pip=True).create(root.name)' || {
-    echo "The selected Python requires venv with pip (Ubuntu/Debian: install the matching package, for example python3.11-venv)." >&2
+    echo "The selected Python requires venv with pip. Install its matching venv/pip package (for example python3.11-venv on Debian/Ubuntu) or select another system Python with --python." >&2
     exit 2
 }
 
@@ -418,9 +455,17 @@ if [ -e "$PREVIOUS_LINK" ] || [ -L "$PREVIOUS_LINK" ]; then
 fi
 
 ensure_user() {
+    if ! getent group "$1" >/dev/null 2>&1; then
+        groupadd --system "$1"
+    fi
     if ! id "$1" >/dev/null 2>&1; then
+        nologin_shell=$(command -v nologin 2>/dev/null || true)
+        case "$nologin_shell" in
+            /*) ;;
+            *) nologin_shell=/bin/false ;;
+        esac
         useradd --system --no-create-home --home-dir /nonexistent \
-            --shell /usr/sbin/nologin "$1"
+            --shell "$nologin_shell" --gid "$1" "$1"
     fi
 }
 
@@ -428,9 +473,7 @@ ensure_user arena-hero
 ensure_user arena-hero-version
 if [ "$WITH_SUPERVISOR" -eq 1 ]; then
     ensure_user arena-hero-supervisor
-    if getent group systemd-journal >/dev/null 2>&1; then
-        usermod -a -G systemd-journal arena-hero-supervisor
-    fi
+    usermod -a -G systemd-journal arena-hero-supervisor
 fi
 
 PROJECT_VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$PROJECT_ROOT/pyproject.toml" | sed -n '1p' | tr -d '\r')
@@ -468,6 +511,9 @@ do
 done
 printf '%s\n' "$RELEASE_ID" > "$BUILD_DIR/release-id"
 printf '%s\n' "$PROJECT_VERSION" > "$BUILD_DIR/source-version"
+if [ -n "$SOURCE_COMMIT" ]; then
+    printf '%s\n' "$SOURCE_COMMIT" > "$BUILD_DIR/source-commit"
+fi
 chmod -R go-w "$BUILD_DIR"
 
 install -d -o root -g arena-hero -m 0750 "$RUNTIME_DIR"
@@ -741,6 +787,9 @@ fi
 finish_link_transaction
 
 echo "Installed Arena Hero Agent release $RELEASE_ID."
+if [ -n "$SOURCE_COMMIT" ]; then
+    echo "Source commit: $SOURCE_COMMIT"
+fi
 echo "Current release: $CURRENT_LINK -> $(readlink "$CURRENT_LINK")"
 if [ -L "$PREVIOUS_LINK" ]; then
     echo "Previous release: $PREVIOUS_LINK -> $(readlink "$PREVIOUS_LINK")"
