@@ -15,7 +15,7 @@ services:
     security_opt:
       - no-new-privileges:true
     volumes:
-      - ./data:/data
+      - dashboard-data:/data
     environment:
       ARENA_HERO_API_KEY_FILE: /run/secrets/arena_hero_api_key
     healthcheck:
@@ -58,3 +58,6 @@ services:
 secrets:
   arena_hero_api_key:
     file: "${ARENA_HERO_API_KEY_SECRET_FILE:-./secrets/arena_hero_api_key.txt}"
+
+volumes:
+  dashboard-data:

@@ -6,6 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin arena
+RUN mkdir -p /data && chown 10001:10001 /data
 
 COPY pyproject.toml requirements-build.lock requirements.lock README.md LICENSE ./
 COPY arena_farmer.py arena_health.py arena_optimizer.py arena_supervisor.py arena_version_monitor.py ./
