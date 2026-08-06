@@ -5111,6 +5111,28 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_STALE_TURN_TIMEOUT_SECONDS,
         help="Exit transiently after this many seconds without an accepted Turn (0 disables).",
     )
+    parser.add_argument(
+        "--snapshot-file",
+        type=Path,
+        default=DEFAULT_SNAPSHOT_FILE,
+        help="Atomically write a dashboard snapshot JSON after every accepted Turn.",
+    )
+    parser.add_argument(
+        "--dashboard-port",
+        type=int,
+        default=DEFAULT_DASHBOARD_PORT,
+        help="Port for the embedded light dashboard (default 8765).",
+    )
+    parser.add_argument(
+        "--dashboard-host",
+        default=DEFAULT_DASHBOARD_HOST,
+        help="Bind address for the embedded dashboard (default 127.0.0.1).",
+    )
+    parser.add_argument(
+        "--no-dashboard",
+        action="store_true",
+        help="Disable the embedded dashboard server.",
+    )
     return parser
 
 

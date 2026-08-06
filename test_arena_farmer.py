@@ -4074,6 +4074,31 @@ class EventLoopTests(unittest.TestCase):
         self.assertEqual(custom.compatibility_marker, Path("custom-hold.json"))
         self.assertEqual(watchdog.stale_turn_timeout_seconds, 45)
 
+    def test_dashboard_cli_flags_parse(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--no-dashboard",
+                "--dashboard-port",
+                "9000",
+                "--dashboard-host",
+                "0.0.0.0",
+                "--snapshot-file",
+                "/tmp/arena-hero-snapshot.json",
+            ]
+        )
+        self.assertTrue(args.no_dashboard)
+        self.assertEqual(args.dashboard_port, 9000)
+        self.assertEqual(args.dashboard_host, "0.0.0.0")
+        self.assertEqual(args.snapshot_file, Path("/tmp/arena-hero-snapshot.json"))
+
+    def test_dashboard_defaults(self) -> None:
+        args = build_parser().parse_args([])
+        self.assertFalse(args.no_dashboard)
+        self.assertEqual(args.dashboard_port, 8765)
+        self.assertEqual(args.dashboard_host, "127.0.0.1")
+        self.assertEqual(args.snapshot_file, Path("snapshot.json"))
+
     def test_stale_turn_watchdog_closes_stream_for_supervisor_restart(self) -> None:
         instances: list[FakeGame] = []
 
