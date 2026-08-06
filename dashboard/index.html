@@ -9,7 +9,7 @@
   color-scheme: light;
   --bg: #f2f4f8;
   --bg2: #e7ebf3;
-  --map-bg: #f0f2f5;
+  --map-bg: #f5f6f8;
   --fg: #1a2233;
   --muted: #5d6b84;
   --card: #ffffff;
@@ -23,8 +23,8 @@
   --explored: rgba(118, 198, 150, 0.20);
   --explored-edge: #6fae85;
   --fog: rgba(30, 50, 80, 0.07);
-  --obstacle: #7d8ca3;
-  --obstacle-edge: #b6c4d6;
+  --obstacle: #4b5a72;
+  --obstacle-edge: #33405a;
   --unreachable: #d8dde6;
   --resource: #c9820b;
   --cargo: #ea580c;
@@ -32,7 +32,8 @@
   --threat-dim: #cf9b98;
   --friend: #0e7ac4;
   --core: #7c3aed;
-  --grid: rgba(150, 165, 185, 0.45);
+  --grid: rgba(150, 165, 185, 0.30);
+  --grid-major: rgba(115, 135, 160, 0.55);
   --hover: rgba(2, 132, 199, 0.22);
   --glow-cyan: rgba(8, 145, 178, 0.3);
   --glass: rgba(255, 255, 255, 0.85);
@@ -364,7 +365,7 @@ tbody tr.clickable { cursor: pointer; }
       <div class="tip" id="tip"></div>
       <div class="legend">
         <span><i style="background:var(--explored);border:1px solid var(--border)"></i>已探索</span>
-        <span><i style="background:rgba(108,121,141,0.55);border:1px dashed var(--border)"></i>未探索</span>
+        <span><i style="background:repeating-linear-gradient(45deg, rgba(100,116,145,0.55) 0 2px, rgba(148,163,184,0.45) 2px 4px);border:1px dashed var(--border)"></i>未探索</span>
         <span><i style="background:var(--obstacle)"></i>障碍</span>
         <span><i class="circle" style="background:var(--resource)"></i>资源点</span>
         <span><i class="circle" style="background:var(--cargo)"></i>掉落货</span>
@@ -548,7 +549,7 @@ function buildFog() {
   fogGray.width = w;
   fogGray.height = h;
   const g = fogGray.getContext("2d");
-  g.fillStyle = "rgba(216, 223, 232, 0.82)";
+  g.fillStyle = "rgba(228, 233, 240, 0.72)";
   g.fillRect(0, 0, w, h);
   g.globalCompositeOperation = "destination-out";
   for (const p of sources) {
@@ -560,7 +561,18 @@ function buildFog() {
   fogBlack.width = w;
   fogBlack.height = h;
   const b = fogBlack.getContext("2d");
-  b.fillStyle = "rgba(108, 121, 141, 0.5)";
+  const pat = document.createElement("canvas");
+  pat.width = 8;
+  pat.height = 8;
+  const pc = pat.getContext("2d");
+  pc.strokeStyle = "rgba(100, 116, 145, 0.55)";
+  pc.lineWidth = 1;
+  pc.beginPath();
+  pc.moveTo(-2, 10);
+  pc.lineTo(10, -2);
+  pc.stroke();
+  const hatch = b.createPattern(pat, "repeat");
+  b.fillStyle = "rgba(148, 163, 184, 0.45)";
   b.beginPath();
   for (let x = minX; x <= maxX; x++) {
     for (let y = minY; y <= maxY; y++) {
@@ -570,6 +582,18 @@ function buildFog() {
     }
   }
   b.fill();
+  if (hatch) {
+    b.fillStyle = hatch;
+    b.beginPath();
+    for (let x = minX; x <= maxX; x++) {
+      for (let y = minY; y <= maxY; y++) {
+        if (!exploredSet.has(`${x},${y}`)) {
+          b.rect((x - minX) * cell, (y - minY) * cell, cell + 0.5, cell + 0.5);
+        }
+      }
+    }
+    b.fill();
+  }
   b.globalCompositeOperation = "destination-out";
   for (const p of sources) {
     fogBrush(b, (p[0] - minX) * cell + cell / 2, (p[1] - minY) * cell + cell / 2, FOG_BLACK_R * cell);
@@ -964,15 +988,30 @@ function drawMap() {
   ctx.stroke();
 
   if (cpx >= 6) {
-    ctx.strokeStyle = css("--grid");
-    ctx.lineWidth = 1;
     const gx0 = Math.floor(base.minX), gy0 = Math.floor(base.minY);
     const gx1 = gx0 + Math.ceil(rect.width / cpx) + 2;
     const gy1 = gy0 + Math.ceil(rect.height / cpx) + 2;
+    const isMajor = v => ((v % 5) + 5) % 5 === 0;
+    if (cpx >= 10) {
+      ctx.strokeStyle = css("--grid");
+      ctx.lineWidth = 1;
+      for (let gx = gx0; gx <= gx1; gx++) {
+        if (isMajor(gx)) continue;
+        ctx.beginPath(); ctx.moveTo(sx(gx), 0); ctx.lineTo(sx(gx), rect.height); ctx.stroke();
+      }
+      for (let gy = gy0; gy <= gy1; gy++) {
+        if (isMajor(gy)) continue;
+        ctx.beginPath(); ctx.moveTo(0, sy(gy)); ctx.lineTo(rect.width, sy(gy)); ctx.stroke();
+      }
+    }
+    ctx.strokeStyle = css("--grid-major");
+    ctx.lineWidth = 1;
     for (let gx = gx0; gx <= gx1; gx++) {
+      if (!isMajor(gx)) continue;
       ctx.beginPath(); ctx.moveTo(sx(gx), 0); ctx.lineTo(sx(gx), rect.height); ctx.stroke();
     }
     for (let gy = gy0; gy <= gy1; gy++) {
+      if (!isMajor(gy)) continue;
       ctx.beginPath(); ctx.moveTo(0, sy(gy)); ctx.lineTo(rect.width, sy(gy)); ctx.stroke();
     }
   }
@@ -1020,6 +1059,23 @@ function drawMap() {
     ctx.drawImage(fogGray, 0, 0, fogGray.width, fogGray.height, sx(fb.minX), sy(fb.minY), fw, fh);
     ctx.drawImage(fogBlack, 0, 0, fogBlack.width, fogBlack.height, sx(fb.minX), sy(fb.minY), fw, fh);
   }
+
+  // 视野光晕：淡蓝径向渐变 + screen 混合，模拟“照亮”网格而不是涂白
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  for (const p of fogSources()) {
+    const hx = sx(p[0]) + cpx / 2, hy = sy(p[1]) + cpx / 2;
+    const hr = FOG_GRAY_R * cpx;
+    const grad = ctx.createRadialGradient(hx, hy, 0, hx, hy, hr);
+    grad.addColorStop(0, "rgba(150, 205, 255, 0.50)");
+    grad.addColorStop(0.45, "rgba(150, 205, 255, 0.18)");
+    grad.addColorStop(1, "rgba(150, 205, 255, 0)");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(hx, hy, hr, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
 
   ctx.strokeStyle = css("--threat");
   ctx.globalAlpha = 0.4;
