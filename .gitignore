@@ -31,6 +31,7 @@ reports/
 state/
 data/
 snapshot.json
+dashboard-memory.json
 state.json
 
 # Editors and operating systems
