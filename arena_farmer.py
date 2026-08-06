@@ -10,7 +10,8 @@ import threading
 import time
 from collections import Counter, deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import Enum
 from getpass import getpass
 from itertools import count
@@ -18,7 +19,7 @@ from pathlib import Path
 from typing import Protocol
 from uuid import UUID
 
-from arena_health import write_heartbeat
+from arena_health import atomic_write_json, write_heartbeat
 from arena_hero import (
     APIError,
     ArenaHeroClient,
@@ -161,6 +162,14 @@ SCOUT_RING_COUNT = 4
 SCOUT_COVERAGE_MEMORY_TTL = 4096
 
 Position = tuple[int, int]
+
+DEFAULT_DASHBOARD_PORT = 8765
+DEFAULT_DASHBOARD_HOST = "127.0.0.1"
+DEFAULT_SNAPSHOT_FILE = Path("snapshot.json")
+SNAPSHOT_SCHEMA_VERSION = 1
+DASHBOARD_MAX_TRAJECTORY = 40
+DASHBOARD_MAX_ROWS = 200
+DASHBOARD_MAX_EXPLORED = 5000
 
 
 class LifecycleMode(str, Enum):
@@ -311,6 +320,276 @@ class ThreatAssessment:
         if self.lifecycle is LifecycleMode.RECOVERY:
             return GlobalPosture.RECOVERY
         return GlobalPosture(self.level.value)
+
+
+@dataclass(slots=True)
+class DashboardMemory:
+    max_trajectory: int = DASHBOARD_MAX_TRAJECTORY
+    max_rows: int = DASHBOARD_MAX_ROWS
+    max_explored: int = DASHBOARD_MAX_EXPLORED
+    trajectories: dict[UUID, deque[Position]] = field(default_factory=dict)
+    explored: dict[Position, int] = field(default_factory=dict)
+    resources_first_seen: dict[Position, int] = field(default_factory=dict)
+    resources_last_seen: dict[Position, int] = field(default_factory=dict)
+    tick_log: deque[dict[str, object]] = field(default_factory=deque)
+    event_log: deque[dict[str, object]] = field(default_factory=deque)
+    history: deque[dict[str, object]] = field(default_factory=deque)
+    last_phase: str | None = None
+    last_threat_level: str | None = None
+    last_recovery: bool | None = None
+    last_compatibility_hold: bool | None = None
+
+    def update(self, turn: Turn, tactic: CoreFarmer) -> None:
+        for unit in turn.units:
+            self.trajectories.setdefault(
+                unit.id, deque(maxlen=self.max_trajectory)
+            ).append(unit.position)
+            self._observe(unit.position, turn.tick)
+        for enemy in turn.visible_enemies:
+            self._observe(enemy.position, turn.tick)
+        if turn.core is not None:
+            self._observe(turn.core.position, turn.tick)
+        for position in turn.obstacle_cells:
+            self._observe(position, turn.tick)
+        for position in turn.resource_cells:
+            self.resources_last_seen[position] = turn.tick
+            self.resources_first_seen.setdefault(position, turn.tick)
+
+        for row in _tick_log_rows(turn, tactic):
+            self.tick_log.append(row)
+        while len(self.tick_log) > self.max_rows:
+            self.tick_log.popleft()
+        for event in turn.events:
+            self.event_log.append(_event_log_row(event))
+        while len(self.event_log) > self.max_rows:
+            self.event_log.popleft()
+
+        phase = tactic.strategy_phase(turn)
+        threat_level = tactic.threat_assessment.level.value
+        recovery = tactic.recovery_mode
+        compatibility_hold = tactic.compatibility_hold
+        current = (phase, threat_level, recovery, compatibility_hold)
+        previous = (
+            self.last_phase,
+            self.last_threat_level,
+            self.last_recovery,
+            self.last_compatibility_hold,
+        )
+        if current != previous:
+            self.history.append(
+                {
+                    "tick": turn.tick,
+                    "text": (
+                        f"phase={phase} threat={threat_level} "
+                        f"recovery={int(recovery)} "
+                        f"compatibility_hold={int(compatibility_hold)}"
+                    ),
+                }
+            )
+            while len(self.history) > self.max_rows:
+                self.history.popleft()
+            (
+                self.last_phase,
+                self.last_threat_level,
+                self.last_recovery,
+                self.last_compatibility_hold,
+            ) = current
+
+    def _observe(self, position: Position, tick: int) -> None:
+        if position in self.explored:
+            return
+        self.explored[position] = tick
+        if len(self.explored) > self.max_explored + self.max_explored // 10:
+            oldest = sorted(self.explored, key=self.explored.get)[
+                : self.max_explored // 10
+            ]
+            for key in oldest:
+                del self.explored[key]
+
+    def view(self, tactic: CoreFarmer) -> dict[str, object]:
+        resources: dict[str, dict[str, object]] = {}
+        for position, last_seen in self.resources_last_seen.items():
+            key = f"{position[0]},{position[1]}"
+            resources[key] = {
+                "position": list(position),
+                "source": "RESOURCE",
+                "first_seen_tick": self.resources_first_seen.get(
+                    position, last_seen
+                ),
+                "last_seen_tick": last_seen,
+                "confirmed_empty": False,
+            }
+        return {
+            "explored": [list(position) for position in self.explored],
+            "obstacles": [list(position) for position in tactic.known_obstacles],
+            "resources": resources,
+            "trajectories": {
+                str(unit_id): [list(position) for position in trail]
+                for unit_id, trail in self.trajectories.items()
+            },
+            "enemy_sightings": _enemy_sightings_view(tactic),
+            "threat_ghosts": _threat_ghosts_view(tactic),
+        }
+
+
+def _enemy_sightings_view(tactic: CoreFarmer) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for enemy_id, sighting in tactic.enemy_unit_sightings.items():
+        motion = tactic.enemy_unit_motion.get(enemy_id)
+        rows.append(
+            {
+                "id": str(enemy_id),
+                "kind": "UNIT",
+                "unit_type": (
+                    motion.unit_type.value if motion is not None else "UNKNOWN"
+                ),
+                "position": list(sighting.position),
+                "last_seen_tick": sighting.last_tick,
+                "stationary": False,
+            }
+        )
+    for enemy_id, sighting in tactic.enemy_core_sightings.items():
+        rows.append(
+            {
+                "id": str(enemy_id),
+                "kind": "CORE",
+                "unit_type": "CORE",
+                "position": list(sighting.position),
+                "last_seen_tick": sighting.last_tick,
+                "stationary": enemy_id in tactic.stationary_core_memory,
+            }
+        )
+    return rows
+
+
+def _threat_ghosts_view(tactic: CoreFarmer) -> list[dict[str, object]]:
+    return [
+        {
+            "id": str(ghost.id),
+            "position": list(ghost.position),
+            "unit_type": ghost.unit_type.value,
+            "expires_tick": ghost.expires_tick,
+        }
+        for ghost in tactic.recent_attack_threats.values()
+    ]
+
+
+def _tick_log_rows(turn: Turn, tactic: CoreFarmer) -> list[dict[str, object]]:
+    plan = turn.plan.model_dump(mode="json", exclude_none=True)
+    actions = plan.get("unit_actions", {})
+    rows: list[dict[str, object]] = []
+    for unit in sorted(turn.units, key=lambda candidate: str(candidate.id)):
+        action = actions.get(str(unit.id), {})
+        action_type = action.get("type", "NONE")
+        direction = action.get("direction")
+        next_position: list[int] | None = None
+        if direction is not None:
+            delta = Direction(direction).delta
+            next_position = [
+                unit.position[0] + delta[0],
+                unit.position[1] + delta[1],
+            ]
+        rows.append(
+            {
+                "tick": turn.tick,
+                "unit_id": str(unit.id),
+                "unit_type": unit.unit_type.value,
+                "pos": list(unit.position),
+                "next": next_position,
+                "action": action_type,
+                "hp": unit.hp,
+                "cargo": unit.cargo if hasattr(unit, "cargo") else None,
+                "role": tactic.worker_modes.get(unit.id, "—"),
+            }
+        )
+    return rows
+
+
+def _event_log_row(event: object) -> dict[str, object]:
+    return {
+        "tick": event.tick,
+        "type": event.event_type,
+        "reason": event.reason_code,
+        "actor": str(event.actor_id) if event.actor_id is not None else None,
+        "target": str(event.target_id) if event.target_id is not None else None,
+        "pos": list(event.position) if event.position is not None else None,
+    }
+
+
+def _core_view(turn: Turn) -> dict[str, object] | None:
+    if turn.core is None:
+        return None
+    return turn.core.view.model_dump(mode="json", exclude_none=True)
+
+
+def _units_view(turn: Turn) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for unit in turn.units:
+        view = unit.view.model_dump(mode="json", exclude_none=True)
+        rows.append(
+            {
+                "id": view["id"],
+                "unit_type": view["unit_type"],
+                "position": view["position"],
+                "hp": view["hp"],
+                "cargo": view.get("cargo"),
+            }
+        )
+    return rows
+
+
+def _enemies_view(turn: Turn) -> list[dict[str, object]]:
+    return [
+        enemy.model_dump(mode="json", exclude_none=True)
+        for enemy in turn.visible_enemies
+    ]
+
+
+def build_snapshot(
+    turn: Turn,
+    tactic: CoreFarmer,
+    memory: DashboardMemory,
+) -> dict[str, object]:
+    threat = tactic.threat_assessment
+    return {
+        "schema_version": SNAPSHOT_SCHEMA_VERSION,
+        "generated_at": datetime.now(UTC)
+        .astimezone(UTC)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "tick": turn.tick,
+        "resources": turn.resources,
+        "resource_capacity": turn.resource_capacity,
+        "resource_space": turn.resource_space,
+        "core": _core_view(turn),
+        "units": _units_view(turn),
+        "visible_enemies": _enemies_view(turn),
+        "visible_resources": [list(p) for p in sorted(turn.resource_cells)],
+        "known_obstacles": [list(p) for p in sorted(tactic.known_obstacles)],
+        "plan": turn.plan.model_dump(mode="json", exclude_none=True),
+        "tactic": {
+            "strategy_phase": tactic.strategy_phase(turn),
+            "worker_target": tactic.worker_target,
+            "beacon_policy": tactic.beacon_policy,
+            "global_posture": threat.global_posture.value,
+            "threat_level": threat.level.value,
+            "threat_reason": threat.primary_reason,
+            "recovery": tactic.recovery_mode,
+            "combat_pressure": threat.combat_pressure,
+            "compatibility_hold": tactic.compatibility_hold,
+            "worker_modes": {
+                str(unit_id): mode for unit_id, mode in tactic.worker_modes.items()
+            },
+            "worker_targets": {
+                str(unit_id): list(target)
+                for unit_id, target in tactic.worker_targets.items()
+            },
+        },
+        "memory": memory.view(tactic),
+        "tick_log": list(memory.tick_log),
+        "event_log": list(memory.event_log),
+        "history": list(memory.history),
+    }
 
 
 @dataclass(slots=True, frozen=True)

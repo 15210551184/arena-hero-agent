@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import io
+import json
 import tempfile
 import threading
 import unittest
@@ -15,10 +16,12 @@ from arena_hero import Accepted, CommandPlan, Direction, PlayerState, Received, 
 
 from arena_farmer import (
     CoreFarmer,
+    DashboardMemory,
     GlobalPosture,
     LifecycleMode,
     ResourceLedgerSnapshot,
     ThreatLevel,
+    build_snapshot,
     _emit_resource_ledger,
     _enemy_threat_cells,
     _is_turn_scoped_api_error,
@@ -248,6 +251,80 @@ class ResourceLedgerTests(unittest.TestCase):
 
         self.assertEqual(result.skipped_reason, "tick_gap")
         self.assertEqual(result.unexplained_loss, 0)
+
+
+class DashboardSnapshotTests(unittest.TestCase):
+    def test_snapshot_contains_turn_and_tactic_state(self) -> None:
+        turn = make_turn(
+            tick=7,
+            units=[
+                unit(WORKER_1, "WORKER", (0, 0), cargo=3),
+                unit(VANGUARD_1, "VANGUARD", (1, 1)),
+            ],
+            enemies=[enemy_core(ENEMY_1, (5, 5))],
+            resource_cells=[(2, 2)],
+            obstacles=[(3, 3)],
+            resources=42,
+            core=True,
+        )
+        tactic = CoreFarmer()
+        tactic.choose_actions(turn)
+        memory = DashboardMemory()
+        memory.update(turn, tactic)
+        snapshot = build_snapshot(turn, tactic, memory)
+
+        self.assertEqual(snapshot["schema_version"], 1)
+        self.assertEqual(snapshot["tick"], 7)
+        self.assertEqual(snapshot["resources"], 42)
+        self.assertEqual(len(snapshot["units"]), 2)
+        self.assertEqual(snapshot["units"][0]["cargo"], 3)
+        self.assertIsNotNone(snapshot["core"])
+        self.assertEqual(len(snapshot["visible_enemies"]), 1)
+        self.assertIn([2, 2], snapshot["visible_resources"])
+        self.assertIn([3, 3], snapshot["known_obstacles"])
+        self.assertIn("unit_actions", snapshot["plan"])
+        self.assertEqual(snapshot["tactic"]["worker_target"], 12)
+        self.assertIn("strategy_phase", snapshot["tactic"])
+        self.assertIn("global_posture", snapshot["tactic"])
+
+    def test_memory_tracks_explored_resources_and_trajectories(self) -> None:
+        turn = make_turn(tick=1, units=[unit(WORKER_1, "WORKER", (0, 0))])
+        tactic = CoreFarmer()
+        tactic.choose_actions(turn)
+        memory = DashboardMemory()
+        memory.update(turn, tactic)
+        view = memory.view(tactic)
+        self.assertIn([0, 0], view["explored"])
+        self.assertIn(str(UUID(WORKER_1)), view["trajectories"])
+        self.assertEqual(view["trajectories"][str(UUID(WORKER_1))][-1], [0, 0])
+
+    def test_memory_caps_trajectory_and_rows(self) -> None:
+        memory = DashboardMemory(max_trajectory=2, max_rows=1)
+        tactic = CoreFarmer()
+        for tick, position in ((1, (0, 0)), (2, (1, 0)), (3, (2, 0))):
+            turn = make_turn(
+                tick=tick,
+                units=[unit(WORKER_1, "WORKER", position)],
+            )
+            tactic.choose_actions(turn)
+            memory.update(turn, tactic)
+        self.assertEqual(len(memory.trajectories[UUID(WORKER_1)]), 2)
+        self.assertEqual(len(memory.tick_log), 1)
+
+    def test_snapshot_round_trips_through_json_file(self) -> None:
+        turn = make_turn(tick=1, units=[unit(WORKER_1, "WORKER", (0, 0))])
+        tactic = CoreFarmer()
+        tactic.choose_actions(turn)
+        memory = DashboardMemory()
+        memory.update(turn, tactic)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "snapshot.json"
+            from arena_health import atomic_write_json
+
+            atomic_write_json(path, build_snapshot(turn, tactic, memory))
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(loaded["tick"], 1)
+        self.assertIn("generated_at", loaded)
 
 
 class CoreFarmerTests(unittest.TestCase):
