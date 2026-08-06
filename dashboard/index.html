@@ -9,7 +9,7 @@
   color-scheme: light;
   --bg: #f2f4f8;
   --bg2: #e7ebf3;
-  --map-bg: #dfe6ef;
+  --map-bg: #f0f2f5;
   --fg: #1a2233;
   --muted: #5d6b84;
   --card: #ffffff;
@@ -20,11 +20,11 @@
   --ok: #059669;
   --warn: #d97706;
   --danger: #dc2626;
-  --explored: rgba(110, 190, 140, 0.22);
-  --explored-edge: #5f9e78;
+  --explored: rgba(118, 198, 150, 0.20);
+  --explored-edge: #6fae85;
   --fog: rgba(30, 50, 80, 0.07);
-  --obstacle: #6b7a92;
-  --obstacle-edge: #93a3ba;
+  --obstacle: #7d8ca3;
+  --obstacle-edge: #b6c4d6;
   --unreachable: #d8dde6;
   --resource: #c9820b;
   --cargo: #ea580c;
@@ -32,7 +32,7 @@
   --threat-dim: #cf9b98;
   --friend: #0e7ac4;
   --core: #7c3aed;
-  --grid: rgba(30, 50, 80, 0.05);
+  --grid: rgba(150, 165, 185, 0.45);
   --hover: rgba(2, 132, 199, 0.22);
   --glow-cyan: rgba(8, 145, 178, 0.3);
   --glass: rgba(255, 255, 255, 0.85);
@@ -364,7 +364,7 @@ tbody tr.clickable { cursor: pointer; }
       <div class="tip" id="tip"></div>
       <div class="legend">
         <span><i style="background:var(--explored);border:1px solid var(--border)"></i>已探索</span>
-        <span><i style="background:#000;border:1px dashed var(--border)"></i>未探索</span>
+        <span><i style="background:rgba(108,121,141,0.55);border:1px dashed var(--border)"></i>未探索</span>
         <span><i style="background:var(--obstacle)"></i>障碍</span>
         <span><i class="circle" style="background:var(--resource)"></i>资源点</span>
         <span><i class="circle" style="background:var(--cargo)"></i>掉落货</span>
@@ -548,7 +548,7 @@ function buildFog() {
   fogGray.width = w;
   fogGray.height = h;
   const g = fogGray.getContext("2d");
-  g.fillStyle = "rgba(120, 132, 152, 0.52)";
+  g.fillStyle = "rgba(216, 223, 232, 0.82)";
   g.fillRect(0, 0, w, h);
   g.globalCompositeOperation = "destination-out";
   for (const p of sources) {
@@ -560,7 +560,7 @@ function buildFog() {
   fogBlack.width = w;
   fogBlack.height = h;
   const b = fogBlack.getContext("2d");
-  b.fillStyle = "#000000";
+  b.fillStyle = "rgba(108, 121, 141, 0.5)";
   b.beginPath();
   for (let x = minX; x <= maxX; x++) {
     for (let y = minY; y <= maxY; y++) {
@@ -977,13 +977,23 @@ function drawMap() {
     }
   }
 
+  ctx.save();
+  ctx.shadowColor = "rgba(60, 75, 100, 0.30)";
+  ctx.shadowBlur = Math.max(2, cpx * 0.14);
+  ctx.shadowOffsetY = Math.max(1, cpx * 0.10);
   ctx.fillStyle = css("--obstacle");
   for (const p of m.obstacles || []) {
     const ox = sx(p[0]) + 0.5, oy = sy(p[1]) + 0.5, os = cpx - 1;
     rr(ox, oy, os, os, Math.min(4, cpx * 0.18));
     ctx.fill();
+  }
+  ctx.restore();
+  ctx.strokeStyle = css("--obstacle-edge");
+  ctx.lineWidth = 1;
+  for (const p of m.obstacles || []) {
+    const ox = sx(p[0]) + 0.5, oy = sy(p[1]) + 0.5, os = cpx - 1;
+    rr(ox, oy, os, os, Math.min(4, cpx * 0.18));
     ctx.strokeStyle = css("--obstacle-edge");
-    ctx.lineWidth = 1;
     ctx.stroke();
   }
 
@@ -1134,7 +1144,7 @@ function drawEntity(pos, kind, colorVar, hp, enemy, dir) {
   const fill = css("--" + colorVar);
   ctx.shadowColor = fill;
   ctx.shadowBlur = cpx >= 6 ? (enemy ? 8 : 5) : 0;
-  ctx.strokeStyle = css("--map-bg"); ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "rgba(25, 35, 55, 0.6)"; ctx.lineWidth = 1.5;
   ctx.fillStyle = fill;
   if (enemy) {
     ctx.beginPath();
