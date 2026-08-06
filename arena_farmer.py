@@ -4990,6 +4990,10 @@ def play(
     compatibility_marker: Path | None = DEFAULT_COMPATIBILITY_MARKER,
     heartbeat_file: Path | None = None,
     stale_turn_timeout_seconds: float = DEFAULT_STALE_TURN_TIMEOUT_SECONDS,
+    snapshot_file: Path = DEFAULT_SNAPSHOT_FILE,
+    dashboard_port: int = DEFAULT_DASHBOARD_PORT,
+    dashboard_host: str = DEFAULT_DASHBOARD_HOST,
+    dashboard_enabled: bool = True,
 ) -> None:
     if (
         not math.isfinite(stale_turn_timeout_seconds)
@@ -5003,6 +5007,27 @@ def play(
     )
     last_accepted_tick: int | None = None
     resource_ledger_snapshot: ResourceLedgerSnapshot | None = None
+    memory = DashboardMemory()
+    activity = {"monotonic": time.monotonic()}
+    if dashboard_enabled:
+        try:
+            from dashboard.server import start_dashboard_thread
+        except ImportError as exc:
+            print(f"WARNING dashboard unavailable: {exc}", file=sys.stderr)
+        else:
+            start_dashboard_thread(
+                port=dashboard_port,
+                host=dashboard_host,
+                snapshot_path=snapshot_file,
+                status_provider=lambda: {
+                    "pid": os.getpid(),
+                    "last_tick": last_accepted_tick,
+                    "last_activity_seconds_ago": round(
+                        time.monotonic() - activity["monotonic"], 1
+                    ),
+                },
+                api_key=api_key,
+            )
     with ArenaHeroClient(api_key=api_key, base_url=base_url) as game:
         watchdog = _AcceptedTurnWatchdog(game, stale_turn_timeout_seconds)
         with watchdog:
@@ -5039,6 +5064,16 @@ def play(
                     raise
                 last_accepted_tick = accepted.tick
                 watchdog.mark_accepted()
+                activity["monotonic"] = time.monotonic()
+                memory.update(turn, tactic)
+                snapshot = build_snapshot(turn, tactic, memory)
+                try:
+                    atomic_write_json(snapshot_file, snapshot)
+                except OSError as exc:
+                    print(
+                        f"WARNING dashboard snapshot write failed: {exc}",
+                        file=sys.stderr,
+                    )
                 resource_ledger_snapshot = _resource_ledger_snapshot(turn)
                 _notify_systemd(
                     "WATCHDOG=1",
@@ -5152,6 +5187,10 @@ def main(argv: list[str] | None = None) -> int:
             compatibility_marker=args.compatibility_marker,
             heartbeat_file=args.heartbeat_file,
             stale_turn_timeout_seconds=args.stale_turn_timeout_seconds,
+            snapshot_file=args.snapshot_file,
+            dashboard_port=args.dashboard_port,
+            dashboard_host=args.dashboard_host,
+            dashboard_enabled=not args.no_dashboard,
         )
 
     except KeyboardInterrupt:

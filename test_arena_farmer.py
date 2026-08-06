@@ -4099,6 +4099,46 @@ class EventLoopTests(unittest.TestCase):
         self.assertEqual(args.dashboard_host, "127.0.0.1")
         self.assertEqual(args.snapshot_file, Path("snapshot.json"))
 
+    def test_play_writes_dashboard_snapshot(self) -> None:
+        events: list[Turn] = [
+            make_turn(tick=3, units=[unit(WORKER_1, "WORKER", (0, 0))])
+        ]
+
+        class FakeGame:
+            def __init__(self, **_kwargs: object) -> None:
+                self.closed = threading.Event()
+
+            def __enter__(self) -> FakeGame:
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                self.close()
+
+            def close(self) -> None:
+                self.closed.set()
+
+            def events(self):
+                yield from events
+                self.closed.wait(timeout=0.1)
+
+        with tempfile.TemporaryDirectory() as directory:
+            snapshot_file = Path(directory) / "snapshot.json"
+            with patch("arena_farmer.ArenaHeroClient", FakeGame):
+                with self.assertRaises(OSError):
+                    play(
+                        "test-only-key",
+                        base_url="https://example.test",
+                        worker_target=12,
+                        beacon_policy="retreat",
+                        snapshot_file=snapshot_file,
+                        dashboard_enabled=False,
+                        stale_turn_timeout_seconds=0.05,
+                    )
+            loaded = json.loads(snapshot_file.read_text(encoding="utf-8"))
+        self.assertEqual(loaded["tick"], 3)
+        self.assertEqual(len(loaded["units"]), 1)
+        self.assertIn("memory", loaded)
+
     def test_stale_turn_watchdog_closes_stream_for_supervisor_restart(self) -> None:
         instances: list[FakeGame] = []
 
