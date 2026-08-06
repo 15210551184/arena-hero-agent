@@ -226,6 +226,7 @@ th { color: var(--muted); font-weight: 500; font-size: 10px; border-bottom: 1px 
 td { border-bottom: 1px solid var(--row-border); }
 tbody tr:hover { background: var(--hover-row); }
 tbody tr:last-child td { border-bottom: none; }
+tbody tr.clickable { cursor: pointer; }
 .tag { display: inline-flex; align-items: center; padding: 0 7px; border-radius: 999px;
   font-size: 10px; font-weight: 500; font-family: inherit; }
 .tag.friend { background: rgba(56, 189, 248, 0.12); color: var(--friend); }
@@ -755,13 +756,39 @@ function tableRows(headers, rows) {
 }
 
 function renderUnits() {
-  const rows = data.units.map(u => `<tr>
+  const rows = data.units.map(u => `<tr class="clickable" data-unit-id="${u.id}">
     <td><span class="tag friend">${zh(u.unit_type, UNIT_ZH)}</span></td>
     <td>${u.id.slice(0, 8)}</td><td>(${u.position})</td><td>${u.hp}</td><td>${u.cargo || 0}</td>
     <td>${roleOf(u.id)}</td></tr>`).join("");
   document.getElementById("units-count").textContent = data.units.length;
   document.getElementById("units-body").innerHTML = tableRows(
     ["类型", "ID", "位置", "HP", "货", "职责"], rows);
+}
+
+document.getElementById("units-body").addEventListener("click", e => {
+  const row = e.target.closest("tr[data-unit-id]");
+  if (row) focusUnit(row.dataset.unitId);
+});
+
+function focusUnit(uid) {
+  if (!data || !base) return;
+  const u = (data.units || []).find(x => x.id === uid);
+  if (!u) return;
+  const rect = canvas.getBoundingClientRect();
+  const current = base.cell * view.scale;
+  if (current < 10) {
+    view.scale = 10 / base.cell;
+  } else if (current > 24) {
+    view.scale = 24 / base.cell;
+  }
+  const cpx = base.cell * view.scale;
+  view.x = rect.width / 2 - base.ox - (u.position[0] - base.minX) * cpx - cpx / 2;
+  view.y = rect.height / 2 - base.oy - (u.position[1] - base.minY) * cpx - cpx / 2;
+  viewTouched = true;
+  fogDirty = true;
+  hoverUnit = u;
+  hover = null;
+  drawMap();
 }
 
 function renderEnemies() {
@@ -805,7 +832,7 @@ function renderHistory() {
 }
 
 function renderEvents() {
-  const rows = [...(data.event_log || [])].reverse().slice(0, 150);
+  const rows = [...(data.event_log || [])].reverse().slice(0, 1000);
   document.getElementById("events-count").textContent = rows.length;
   const cls = t => {
     if (/DAMAGED|DESTROYED|SELF_DESTRUCT/.test(t)) return "threat";
@@ -838,7 +865,7 @@ function roleOf(uid) {
 
 function renderLogs() {
   if (!data) return;
-  const rows = [...(data.tick_log || [])].reverse().slice(0, 400);
+  const rows = [...(data.tick_log || [])].reverse().slice(0, 1000);
   const units = [...new Set(rows.map(r => r.unit_id))];
   const pills = document.getElementById("log-pills");
   pills.innerHTML = `<button type="button" class="pill-btn ${!logFilter ? "is-active" : ""}" data-unit="">全部</button>` +

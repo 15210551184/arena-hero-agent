@@ -254,6 +254,10 @@ class ResourceLedgerTests(unittest.TestCase):
 
 
 class DashboardSnapshotTests(unittest.TestCase):
+    def test_default_record_caps(self) -> None:
+        self.assertEqual(DashboardMemory().max_rows, 1000)
+        self.assertEqual(DashboardMemory().max_trajectory, 40)
+
     def test_snapshot_contains_turn_and_tactic_state(self) -> None:
         turn = make_turn(
             tick=7,
