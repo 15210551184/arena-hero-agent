@@ -17,8 +17,11 @@ from arena_hero import Accepted, CommandPlan, Direction, PlayerState, Received, 
 from arena_farmer import (
     CoreFarmer,
     DashboardMemory,
+    DEFENSE_VANGUARD_TARGET,
     GlobalPosture,
     LifecycleMode,
+    MAX_FLEET_UNITS,
+    MAX_WORKER_TARGET,
     ResourceLedgerSnapshot,
     ThreatLevel,
     build_snapshot,
@@ -286,6 +289,8 @@ class DashboardSnapshotTests(unittest.TestCase):
         self.assertIn([3, 3], snapshot["known_obstacles"])
         self.assertIn("unit_actions", snapshot["plan"])
         self.assertEqual(snapshot["tactic"]["worker_target"], 12)
+        self.assertEqual(snapshot["tactic"]["resource_target"], 0)
+        self.assertIs(snapshot["tactic"]["stockpile_active"], False)
         self.assertIn("strategy_phase", snapshot["tactic"])
         self.assertIn("global_posture", snapshot["tactic"])
 
@@ -3151,28 +3156,28 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertEqual(tactic.isolated_core_target_id, UUID(ENEMY_1))
 
     def test_worker_limit_reserves_seven_defense_slots(self) -> None:
-        CoreFarmer(worker_target=12)
-        with self.assertRaisesRegex(ValueError, "between 1 and 12"):
-            CoreFarmer(worker_target=13)
+        CoreFarmer(worker_target=MAX_WORKER_TARGET)
+        with self.assertRaisesRegex(ValueError, "between 1 and 27"):
+            CoreFarmer(worker_target=MAX_WORKER_TARGET + 1)
 
-    def test_population_hard_stops_at_19_without_self_destruct(self) -> None:
+    def test_population_hard_stops_at_fleet_cap_without_self_destruct(self) -> None:
         units = [
             unit(
                 f"20000000-0000-4000-8000-{index:012x}",
                 (
                     "WORKER"
-                    if index < 12
+                    if index < MAX_WORKER_TARGET
                     else "VANGUARD"
-                    if index < 15
+                    if index < MAX_WORKER_TARGET + DEFENSE_VANGUARD_TARGET
                     else "RANGER"
                 ),
                 (20 + index, 20),
-                cargo=0 if index < 12 else None,
+                cargo=0 if index < MAX_WORKER_TARGET else None,
             )
-            for index in range(19)
+            for index in range(MAX_FLEET_UNITS)
         ]
-        turn = make_turn(resources=95, units=units)
-        tactic = CoreFarmer(worker_target=12, beacon_policy="hold")
+        turn = make_turn(resources=MAX_FLEET_UNITS * 5, units=units)
+        tactic = CoreFarmer(worker_target=MAX_WORKER_TARGET, beacon_policy="hold")
         tactic.choose_actions(turn)
         queued = turn.plan.model_dump(mode="json", exclude_none=True)
 
@@ -3186,6 +3191,99 @@ class CoreFarmerTests(unittest.TestCase):
                 for action in queued.get("unit_actions", {}).values()
             )
         )
+
+    def test_population_can_expand_beyond_nineteen_units(self) -> None:
+        workers = [
+            unit(
+                f"20000000-0000-4000-8000-{index:012x}",
+                "WORKER",
+                (20 + index, 20),
+                cargo=0,
+            )
+            for index in range(19)
+        ]
+        turn = make_turn(resources=20, units=workers)
+        tactic = CoreFarmer(worker_target=20, beacon_policy="hold")
+        tactic.choose_actions(turn)
+        queued = turn.plan.model_dump(mode="json", exclude_none=True)
+
+        self.assertEqual(queued["core_action"]["type"], "SPAWN")
+        self.assertEqual(queued["core_action"]["unit_type"], "WORKER")
+
+    def test_spawn_uses_dynamic_cost_above_twenty_units(self) -> None:
+        workers = [
+            unit(
+                f"20000000-0000-4000-8000-{index:012x}",
+                "WORKER",
+                (20 + index, 20),
+                cargo=0,
+            )
+            for index in range(26)
+        ]
+        accumulating = make_turn(resources=22, units=workers)
+        CoreFarmer(worker_target=27, beacon_policy="hold").choose_actions(
+            accumulating
+        )
+        accumulating_plan = accumulating.plan.model_dump(
+            mode="json",
+            exclude_none=True,
+        )
+        self.assertNotEqual(
+            accumulating_plan.get("core_action", {}).get("unit_type"),
+            "WORKER",
+        )
+
+        expanding = make_turn(resources=23, units=workers)
+        CoreFarmer(worker_target=27, beacon_policy="hold").choose_actions(expanding)
+        expanding_plan = expanding.plan.model_dump(
+            mode="json",
+            exclude_none=True,
+        )
+        self.assertEqual(expanding_plan["core_action"]["type"], "SPAWN")
+        self.assertEqual(expanding_plan["core_action"]["unit_type"], "WORKER")
+
+    def test_resource_target_banks_resources_and_stops_spending(self) -> None:
+        workers = [
+            unit(
+                f"20000000-0000-4000-8000-{index:012x}",
+                "WORKER",
+                (20 + index, 20),
+                cargo=0,
+            )
+            for index in range(26)
+        ]
+        defenders = [
+            unit(VANGUARD_1, "VANGUARD", (2, 0)),
+            unit(VANGUARD_2, "VANGUARD", (3, 0)),
+            unit(
+                "30000000-0000-4000-8000-000000000003",
+                "VANGUARD",
+                (4, 0),
+            ),
+            unit(RANGER_1, "RANGER", (5, 0)),
+        ]
+        units = [*workers, *defenders]
+
+        at_target = make_turn(resources=150, shield=4, units=units)
+        CoreFarmer(
+            worker_target=27,
+            resource_target=150,
+            beacon_policy="hold",
+        ).choose_actions(at_target)
+        queued = at_target.plan.model_dump(mode="json", exclude_none=True)
+        self.assertNotIn(
+            queued.get("core_action", {}).get("type"),
+            {"SPAWN", "REPAIR_SHIELD"},
+        )
+
+        below_target = make_turn(resources=149, shield=4, units=units)
+        CoreFarmer(
+            worker_target=27,
+            resource_target=150,
+            beacon_policy="hold",
+        ).choose_actions(below_target)
+        queued = below_target.plan.model_dump(mode="json", exclude_none=True)
+        self.assertEqual(queued["core_action"]["type"], "REPAIR_SHIELD")
 
     def test_four_workers_accumulate_before_expanding_to_six(self) -> None:
         workers = [
@@ -4151,10 +4249,15 @@ class EventLoopTests(unittest.TestCase):
     def test_dashboard_defaults(self) -> None:
         args = build_parser().parse_args([])
         self.assertFalse(args.no_dashboard)
+        self.assertEqual(args.resource_target, 0)
         self.assertEqual(args.dashboard_port, 8765)
         self.assertEqual(args.dashboard_host, "127.0.0.1")
         self.assertEqual(args.snapshot_file, Path("snapshot.json"))
         self.assertEqual(args.dashboard_memory_file, Path("dashboard-memory.json"))
+
+    def test_resource_target_cli_flag_parses(self) -> None:
+        args = build_parser().parse_args(["--resource-target", "150"])
+        self.assertEqual(args.resource_target, 150)
 
     def test_play_writes_dashboard_snapshot(self) -> None:
         events: list[Turn] = [

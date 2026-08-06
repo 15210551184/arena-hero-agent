@@ -19,6 +19,10 @@ All notable changes to this project will be documented in this file. The format 
   `423d252` source commit (PyPI 0.2.9 not yet published), which drops the
   removed `population_tier` / `upkeep_next_tick` state fields and adds
   `unit_cost()` / `UNIT_BASE_COSTS`.
+- Fleet cap raised from 19 to 34 (`MAX_WORKER_TARGET=27`) with cost-aware
+  spawning through `unit_cost()`, plus an optional `--resource-target N`
+  stockpile mode that banks resources and stops discretionary production and
+  shield repair once the target is reached.
 - Hierarchical lifecycle and threat assessment with explicit posture/reason diagnostics for alerts, pre-evasion, engagement, multi-axis breakout, recovery, and compatibility hold.
 
 ### Changed

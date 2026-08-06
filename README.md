@@ -186,11 +186,24 @@ Common Agent options:
 
 ```text
 --worker-target 12
+--resource-target 0
 --beacon-policy retreat
 --base-url https://api.arenahero.io
 --compatibility-marker PATH
 --no-compatibility-marker
 ```
+
+`worker_target` may go up to 27 (total fleet cap 34). Spawn affordability uses
+the official `unit_cost()` helper, so production above 20 units correctly
+applies the dynamic v0.14 price tiers.
+
+`--resource-target N` enables stockpile mode: once Core resources reach `N`,
+the Agent stops discretionary production and shield repair and banks income
+(emergency healing and retreat still run). Core storage is
+`max(10, population × 5)`, so reaching a target like 150 requires a fleet of at
+least 30 units (for example `ARENA_WORKER_TARGET=26` plus the normal defense
+fleet). In Docker Compose set `ARENA_RESOURCE_TARGET` in your environment; the
+systemd path reads it from `deploy/arena-hero-runtime.env`.
 
 See [configuration](docs/configuration.md), [deployment](docs/deployment.md), and [strategy](docs/strategy.md) for the complete operational contract.
 

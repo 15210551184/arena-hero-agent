@@ -722,8 +722,13 @@ function renderCore() {
   segs("core-shield-segs", c.shield, 5, true);
   document.getElementById("core-hp-val").textContent = `${c.hp}/5`;
   document.getElementById("core-shield-val").textContent = `${c.shield}/5`;
-  document.getElementById("core-meta").textContent =
-    `资源 ${data.resources ?? "—"}/${data.resource_capacity ?? "—"} · 余量 ${data.resource_space ?? "—"}`;
+  const tgt = data.tactic?.resource_target ?? 0;
+  let meta = `资源 ${data.resources ?? "—"}/${data.resource_capacity ?? "—"} · 余量 ${data.resource_space ?? "—"}`;
+  if (tgt > 0) {
+    const reached = (data.resources ?? 0) >= tgt;
+    meta += ` · 囤积目标 ${tgt}${reached ? " ✓ 已达" : ""}`;
+  }
+  document.getElementById("core-meta").textContent = meta;
 }
 
 function renderPlan() {

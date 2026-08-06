@@ -37,6 +37,8 @@ services:
       - arena-hero-agent
       - --worker-target
       - "${ARENA_WORKER_TARGET:-12}"
+      - --resource-target
+      - "${ARENA_RESOURCE_TARGET:-0}"
       - --beacon-policy
       - "${ARENA_BEACON_POLICY:-retreat}"
       - --no-compatibility-marker

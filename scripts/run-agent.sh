@@ -6,6 +6,7 @@ PROJECT_ROOT=$(dirname "$SCRIPT_DIR")
 AGENT="$PROJECT_ROOT/.venv/bin/arena-hero-agent"
 ENV_FILE=${ARENA_HERO_ENV_FILE:-$PROJECT_ROOT/.env}
 WORKER_TARGET=${ARENA_WORKER_TARGET:-12}
+RESOURCE_TARGET=${ARENA_RESOURCE_TARGET:-0}
 BEACON_POLICY=${ARENA_BEACON_POLICY:-retreat}
 RETRY_DELAY=2
 
@@ -18,6 +19,7 @@ while :; do
     "$AGENT" \
         --env-file "$ENV_FILE" \
         --worker-target "$WORKER_TARGET" \
+        --resource-target "$RESOURCE_TARGET" \
         --beacon-policy "$BEACON_POLICY" \
         --no-compatibility-marker \
         "$@"

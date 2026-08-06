@@ -36,6 +36,7 @@ from arena_hero import (
     TransportError,
     Turn,
     UnitType,
+    unit_cost,
 )
 
 API_KEY_ENV = "ARENA_HERO_API_KEY"
@@ -44,6 +45,7 @@ DEFAULT_COMPATIBILITY_MARKER = Path(
     "/var/lib/arena-hero-version/compatibility-hold.json"
 )
 DEFAULT_WORKER_TARGET = 12
+DEFAULT_RESOURCE_TARGET = 0
 DEFAULT_BEACON_POLICY = "retreat"
 BASE_WORKER_TARGET = 6
 CORE_RESOURCE_RESERVE = 10
@@ -52,13 +54,12 @@ LATE_EXPANSION_RESERVE = 15
 EARLY_DEFENSE_WORKER_GOAL = 8
 EARLY_DEFENSE_RESERVE = 15
 LONG_TERM_DEFENSE_RESERVE = 15
-VANGUARD_COST = 10
-RANGER_COST = 12
 EARLY_DEFENSE_VANGUARD_TARGET = 1
 EARLY_DEFENSE_RANGER_TARGET = 1
 DEFENSE_VANGUARD_TARGET = 3
 DEFENSE_RANGER_TARGET = 4
-MAX_WORKER_TARGET = 19 - DEFENSE_VANGUARD_TARGET - DEFENSE_RANGER_TARGET
+MAX_FLEET_UNITS = 34
+MAX_WORKER_TARGET = MAX_FLEET_UNITS - DEFENSE_VANGUARD_TARGET - DEFENSE_RANGER_TARGET
 VANGUARD_GUARD_RADIUS = 3
 RANGER_GUARD_RADIUS = 2
 VANGUARD_CORE_GUARDS = 1
@@ -649,6 +650,8 @@ def build_snapshot(
         "tactic": {
             "strategy_phase": tactic.strategy_phase(turn),
             "worker_target": tactic.worker_target,
+            "resource_target": tactic.resource_target,
+            "stockpile_active": tactic._stockpile_hit(turn),
             "beacon_policy": tactic.beacon_policy,
             "global_posture": threat.global_posture.value,
             "threat_level": threat.level.value,
@@ -1762,10 +1765,11 @@ def _worker_expansion_threshold(
     worker_count: int,
     worker_target: int,
     resource_capacity: int,
+    population: int,
 ) -> int:
     if worker_count < BASE_WORKER_TARGET:
         return min(
-            CORE_RESOURCE_RESERVE + WORKER_EXPANSION_COST,
+            CORE_RESOURCE_RESERVE + unit_cost(UnitType.WORKER, population),
             resource_capacity,
         )
 
@@ -1775,7 +1779,11 @@ def _worker_expansion_threshold(
         BASE_WORKER_TARGET + 2 * (completed_late_stages + 1),
     )
     remaining_stage_workers = max(1, stage_target - worker_count)
-    return LATE_EXPANSION_RESERVE + WORKER_EXPANSION_COST * remaining_stage_workers
+    expansion_cost = sum(
+        unit_cost(UnitType.WORKER, population + offset)
+        for offset in range(remaining_stage_workers)
+    )
+    return LATE_EXPANSION_RESERVE + expansion_cost
 
 
 def _uuid_sort_key(obj: object) -> bytes:
@@ -1792,6 +1800,7 @@ class CoreFarmer:
         self,
         *,
         worker_target: int = DEFAULT_WORKER_TARGET,
+        resource_target: int = DEFAULT_RESOURCE_TARGET,
         beacon_policy: str = DEFAULT_BEACON_POLICY,
         compatibility_marker: Path | None = DEFAULT_COMPATIBILITY_MARKER,
     ) -> None:
@@ -1799,9 +1808,12 @@ class CoreFarmer:
             raise ValueError(
                 f"worker_target must be between 1 and {MAX_WORKER_TARGET}"
             )
+        if not 0 <= resource_target <= 1_000_000:
+            raise ValueError("resource_target must be between 0 and 1000000")
         if beacon_policy not in {"hold", "pursue", "retreat"}:
             raise ValueError("beacon_policy must be 'hold', 'pursue', or 'retreat'")
         self.worker_target = worker_target
+        self.resource_target = resource_target
         self.beacon_policy = beacon_policy
         self.compatibility_marker = compatibility_marker
         self.compatibility_hold = False
@@ -1886,6 +1898,9 @@ class CoreFarmer:
         ):
             return "FORTIFY"
         return "STOCKPILE"
+
+    def _stockpile_hit(self, turn: Turn) -> bool:
+        return self.resource_target > 0 and turn.resources >= self.resource_target
 
     def _refresh_compatibility_hold(self) -> None:
         if self.compatibility_marker is None:
@@ -4417,7 +4432,8 @@ class CoreFarmer:
             not self.compatibility_hold
             and
             context.friendly_counts[core.position] < 2
-            and len(turn.units) < 19
+            and len(turn.units) < MAX_FLEET_UNITS
+            and not self._stockpile_hit(turn)
         )
         nearest_threat = min(
             (
@@ -4464,7 +4480,11 @@ class CoreFarmer:
             core.heal()
             return
 
-        if core.shield < 5 and turn.resources >= 1:
+        if (
+            core.shield < 5
+            and turn.resources >= 1
+            and not self._stockpile_hit(turn)
+        ):
             core.repair_shield()
             return
 
@@ -4491,7 +4511,8 @@ class CoreFarmer:
                 nearest_threat is not None
                 and nearest_threat <= 3
                 and len(turn.vanguards) < DEFENSE_VANGUARD_TARGET
-                and turn.resources >= VANGUARD_COST
+                and turn.resources
+                >= unit_cost(UnitType.VANGUARD, turn.state.population)
             ):
                 core.spawn(UnitType.VANGUARD)
                 return
@@ -4500,7 +4521,8 @@ class CoreFarmer:
                 and nearest_threat <= 6
                 and len(turn.workers) >= 4
                 and len(turn.rangers) < DEFENSE_RANGER_TARGET
-                and turn.resources >= RANGER_COST
+                and turn.resources
+                >= unit_cost(UnitType.RANGER, turn.state.population)
             ):
                 core.spawn(UnitType.RANGER)
                 return
@@ -4522,7 +4544,8 @@ class CoreFarmer:
                 early_defense_is_safe
                 and len(turn.vanguards) < EARLY_DEFENSE_VANGUARD_TARGET
                 and turn.resources
-                >= EARLY_DEFENSE_RESERVE + VANGUARD_COST
+                >= EARLY_DEFENSE_RESERVE
+                + unit_cost(UnitType.VANGUARD, turn.state.population)
             ):
                 core.spawn(UnitType.VANGUARD)
                 return
@@ -4530,7 +4553,9 @@ class CoreFarmer:
                 early_defense_is_safe
                 and len(turn.vanguards) >= EARLY_DEFENSE_VANGUARD_TARGET
                 and len(turn.rangers) < EARLY_DEFENSE_RANGER_TARGET
-                and turn.resources >= EARLY_DEFENSE_RESERVE + RANGER_COST
+                and turn.resources
+                >= EARLY_DEFENSE_RESERVE
+                + unit_cost(UnitType.RANGER, turn.state.population)
             ):
                 core.spawn(UnitType.RANGER)
                 return
@@ -4540,12 +4565,16 @@ class CoreFarmer:
                 and len(turn.workers)
                 < min(RECOVERY_MIN_WORKERS, self.worker_target)
             ):
-                expansion_threshold = WORKER_EXPANSION_COST
+                expansion_threshold = unit_cost(
+                    UnitType.WORKER,
+                    turn.state.population,
+                )
             else:
                 expansion_threshold = _worker_expansion_threshold(
                     len(turn.workers),
                     self.worker_target,
                     turn.resource_capacity,
+                    turn.state.population,
                 )
             economic_expansion_is_safe = (
                 nearest_threat is None or nearest_threat > 6
@@ -4564,7 +4593,10 @@ class CoreFarmer:
                 and turn.resources >= LONG_TERM_DEFENSE_RESERVE
             )
             if mature_for_defense and len(turn.vanguards) < DEFENSE_VANGUARD_TARGET:
-                if turn.resources >= LONG_TERM_DEFENSE_RESERVE + VANGUARD_COST:
+                if turn.resources >= LONG_TERM_DEFENSE_RESERVE + unit_cost(
+                    UnitType.VANGUARD,
+                    turn.state.population,
+                ):
                     core.spawn(UnitType.VANGUARD)
                     return
             if (
@@ -4572,7 +4604,10 @@ class CoreFarmer:
                 and len(turn.vanguards) >= DEFENSE_VANGUARD_TARGET
                 and len(turn.rangers) < DEFENSE_RANGER_TARGET
             ):
-                if turn.resources >= LONG_TERM_DEFENSE_RESERVE + RANGER_COST:
+                if turn.resources >= LONG_TERM_DEFENSE_RESERVE + unit_cost(
+                    UnitType.RANGER,
+                    turn.state.population,
+                ):
                     core.spawn(UnitType.RANGER)
                     return
 
@@ -4893,6 +4928,8 @@ def _position_diagnostics(turn: Turn, tactic: CoreFarmer) -> str:
         f"defender_on_core={defender_on_core} "
         f"delivery_blocked={delivery_blocked} "
         f"resource_blocked={resource_blocked} "
+        f"resource_target={tactic.resource_target} "
+        f"stockpile={int(tactic._stockpile_hit(turn))} "
         f"scout_chunks={len(tactic.scout_chunk_last_seen)} "
         f"scout_oldest_age={scout_oldest_age} "
         f"captured_resources={captured_resources} "
@@ -5065,6 +5102,7 @@ def play(
     *,
     base_url: str,
     worker_target: int,
+    resource_target: int = DEFAULT_RESOURCE_TARGET,
     beacon_policy: str,
     compatibility_marker: Path | None = DEFAULT_COMPATIBILITY_MARKER,
     heartbeat_file: Path | None = None,
@@ -5082,6 +5120,7 @@ def play(
         raise ValueError("stale Turn timeout must be finite and zero or positive")
     tactic = CoreFarmer(
         worker_target=worker_target,
+        resource_target=resource_target,
         beacon_policy=beacon_policy,
         compatibility_marker=compatibility_marker,
     )
@@ -5204,6 +5243,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--worker-target", type=int, default=DEFAULT_WORKER_TARGET)
     parser.add_argument(
+        "--resource-target",
+        type=int,
+        default=DEFAULT_RESOURCE_TARGET,
+        help=(
+            "Stop discretionary production and shield repair once Core "
+            "resources reach this bank target; 0 disables stockpile mode."
+        ),
+    )
+    parser.add_argument(
         "--beacon-policy",
         choices=("hold", "pursue", "retreat"),
         default=DEFAULT_BEACON_POLICY,
@@ -5276,6 +5324,7 @@ def main(argv: list[str] | None = None) -> int:
             api_key,
             base_url=args.base_url,
             worker_target=args.worker_target,
+            resource_target=args.resource_target,
             beacon_policy=args.beacon_policy,
             compatibility_marker=args.compatibility_marker,
             heartbeat_file=args.heartbeat_file,
