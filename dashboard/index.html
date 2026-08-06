@@ -4,8 +4,1043 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Arena Hero 数据面板</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f2f4f8;
+  --bg2: #e7ebf3;
+  --fg: #1a2233;
+  --muted: #5d6b84;
+  --card: #ffffff;
+  --card2: #f0f3f9;
+  --border: #d9e0ec;
+  --accent: #0891b2;
+  --accent2: #6366f1;
+  --ok: #059669;
+  --warn: #d97706;
+  --danger: #dc2626;
+  --explored: #e3efe8;
+  --obstacle: #5b6675;
+  --obstacle-edge: #7a8595;
+  --unreachable: #d8dde6;
+  --resource: #c9820b;
+  --cargo: #ea580c;
+  --threat: #dc2626;
+  --threat-dim: #cf9b98;
+  --friend: #0284c7;
+  --core: #7c3aed;
+  --grid: rgba(30, 50, 80, 0.08);
+  --hover: rgba(2, 132, 199, 0.22);
+  --glow-cyan: rgba(8, 145, 178, 0.3);
+  --glass: rgba(255, 255, 255, 0.85);
+  --glass-strong: rgba(255, 255, 255, 0.94);
+  --chip: rgba(15, 30, 60, 0.05);
+  --row-border: rgba(15, 30, 60, 0.07);
+  --hover-row: rgba(15, 30, 60, 0.04);
+  --seg-off: rgba(15, 30, 60, 0.1);
+  --glow-bg: #dce7ff;
+  --mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: radial-gradient(1200px 500px at 20% -10%, var(--glow-bg) 0%, transparent 60%),
+    linear-gradient(180deg, var(--bg), var(--bg2));
+  color: var(--fg);
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Microsoft YaHei", "Segoe UI", sans-serif;
+  overflow: hidden;
+}
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.page { height: 100%; display: flex; flex-direction: column; padding: 0 14px 12px; }
+
+/* 顶部导航 */
+.topbar {
+  display: flex; align-items: center; gap: 18px; flex: none; flex-wrap: wrap;
+  padding: 10px 4px 12px;
+}
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand .logo {
+  width: 32px; height: 32px; border-radius: 9px; flex: none;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  display: grid; place-items: center; box-shadow: 0 0 14px var(--glow-cyan);
+}
+.brand .logo svg { width: 17px; height: 17px; color: #04121a; }
+.brand h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: 0.4px; }
+.brand .sub { color: var(--muted); font-size: 11px; }
+
+.hud { display: flex; gap: 6px; flex-wrap: wrap; }
+.hud-item {
+  display: flex; align-items: baseline; gap: 6px; padding: 4px 10px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+}
+.hud-label { color: var(--muted); font-size: 11px; }
+.hud-value { font-size: 14px; font-weight: 600; }
+.hud-item.danger .hud-value { color: var(--danger); animation: blink 1.6s ease-in-out infinite; }
+.hud-item.warn .hud-value { color: var(--warn); }
+.hud-item.accent .hud-value { color: var(--accent); }
+@keyframes blink { 50% { opacity: 0.45; } }
+
+.top-controls { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ctl {
+  color: var(--muted); font-size: 11.5px; padding: 4px 9px; background: var(--card);
+  border: 1px solid var(--border); border-radius: 8px; display: inline-flex; gap: 6px; align-items: center;
+}
+.ctl b { color: var(--fg); font-weight: 500; }
+.ctl-btn {
+  border: 1px solid var(--border); background: var(--card); color: var(--fg);
+  border-radius: 8px; padding: 5px 12px; font-size: 11.5px; cursor: pointer; font-family: inherit;
+  transition: border-color 0.15s, color 0.15s;
+}
+.ctl-btn:hover { border-color: var(--accent); color: var(--accent); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: #4b5563; }
+.dot.ok { background: var(--ok); box-shadow: 0 0 6px var(--ok); animation: pulse 2.2s ease-out infinite; }
+.dot.bad { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.45); }
+  70% { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+}
+@media (prefers-reduced-motion: reduce) { .dot.ok, .hud-item.danger .hud-value { animation: none; } }
+
+/* 主工作区 */
+.workspace {
+  flex: 1 1 auto; min-height: 0; display: grid;
+  grid-template-columns: minmax(0, 2.1fr) minmax(320px, 1fr); gap: 12px;
+}
+.map-col { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.map-wrap {
+  position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: inset 0 0 60px rgba(34, 211, 238, 0.03);
+}
+canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+canvas.dragging { cursor: grabbing; }
+
+.map-toolbar {
+  position: absolute; top: 10px; left: 10px; display: flex; gap: 8px; align-items: center;
+  background: var(--glass); backdrop-filter: blur(8px);
+  border: 1px solid var(--border); border-radius: 9px; padding: 4px 5px;
+}
+.map-toolbar button {
+  border: 1px solid var(--border); background: var(--chip); color: var(--fg);
+  border-radius: 6px; padding: 3px 9px; font-size: 11.5px; cursor: pointer; font-family: inherit;
+}
+.map-toolbar button:hover { border-color: var(--accent); color: var(--accent); }
+.map-toolbar .hint { color: var(--muted); font-size: 11px; padding: 0 3px; }
+.tip {
+  position: absolute; top: 10px; right: 10px; pointer-events: none;
+  background: var(--glass); backdrop-filter: blur(8px);
+  border: 1px solid var(--border); border-radius: 9px; padding: 6px 10px;
+  font-size: 11.5px; color: var(--muted); max-width: 280px; font-family: var(--mono);
+}
+.legend {
+  position: absolute; left: 10px; bottom: 10px; display: flex; flex-wrap: wrap; gap: 5px;
+  background: var(--glass); backdrop-filter: blur(8px);
+  border: 1px solid var(--border); border-radius: 10px; padding: 7px 8px;
+  font-size: 11px; color: var(--muted); max-width: calc(100% - 20px);
+  opacity: 0; pointer-events: none; transition: opacity 0.2s;
+}
+.map-wrap:hover .legend { opacity: 1; }
+.legend span {
+  display: inline-flex; align-items: center; gap: 5px; padding: 1px 6px;
+  border-radius: 999px; background: var(--chip);
+}
+.legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+.legend i.circle { border-radius: 50%; }
+
+/* 逐帧追踪悬浮条 */
+.log-drawer { flex: none; border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+  background: var(--glass-strong); backdrop-filter: blur(8px); }
+.log-bar {
+  display: flex; align-items: center; gap: 8px; padding: 5px 10px; cursor: pointer;
+}
+.drawer-toggle {
+  border: none; background: none; color: var(--muted); cursor: pointer; font-size: 12px;
+  width: 18px; height: 18px; padding: 0; transition: transform 0.2s;
+}
+.log-drawer.open .drawer-toggle { transform: rotate(90deg); }
+.log-title { font-size: 11.5px; color: var(--muted); letter-spacing: 0.5px; }
+.log-count { font-size: 11.5px; color: var(--accent); }
+.pills { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.pills::-webkit-scrollbar { display: none; }
+.pill-btn {
+  flex: none; border: 1px solid var(--border); background: var(--chip);
+  color: var(--muted); border-radius: 999px; padding: 1px 9px; font-size: 10.5px;
+  cursor: pointer; font-family: var(--mono);
+}
+.pill-btn:hover { color: var(--fg); }
+.pill-btn.is-active { border-color: var(--accent); color: var(--accent); background: rgba(34, 211, 238, 0.1); }
+.log-body { border-top: 1px solid var(--border); }
+.log-body .scroll { max-height: 220px; }
+
+/* 右侧面板 */
+.side { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.core-panel { flex: none; background: var(--card); border: 1px solid var(--border);
+  border-radius: 12px; padding: 10px 12px; }
+.core-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.core-title { font-size: 11.5px; letter-spacing: 1px; color: var(--accent); font-weight: 600; }
+.core-pos { font-size: 11px; color: var(--muted); }
+.core-state { margin-left: auto; font-size: 10.5px; padding: 1px 7px; border-radius: 999px;
+  background: rgba(52, 211, 153, 0.12); color: var(--ok); }
+.core-state.moving { background: rgba(245, 158, 11, 0.12); color: var(--warn); }
+.bar-row { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+.bar-label { width: 22px; color: var(--muted); font-size: 11px; }
+.segs { flex: 1; display: flex; gap: 3px; }
+.seg { flex: 1; height: 8px; border-radius: 2px; background: var(--seg-off); }
+.seg.on {
+  background: linear-gradient(180deg, #5eead4 0%, #14b8a6 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 0 6px rgba(20, 184, 166, 0.45);
+}
+.seg.on.shield { background: linear-gradient(180deg, #a5b4fc 0%, #6366f1 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 0 6px rgba(99, 102, 241, 0.45); }
+.bar-val { width: 40px; text-align: right; font-size: 11px; color: var(--fg); }
+.core-meta { margin-top: 8px; font-size: 11px; color: var(--muted); }
+.side-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+  scrollbar-width: thin; }
+.panel { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; }
+.panel h2 {
+  margin: 0 0 8px; font-size: 11px; font-weight: 600; color: var(--muted);
+  letter-spacing: 0.8px; text-transform: uppercase; display: flex; align-items: center; gap: 7px;
+}
+.panel h2 .cnt { background: rgba(34, 211, 238, 0.12); color: var(--accent); border-radius: 999px;
+  padding: 0 7px; font-size: 10px; font-weight: 600; }
+.scroll { overflow: auto; margin: 0 -4px; padding: 0 4px; }
+.scroll::-webkit-scrollbar { width: 5px; }
+.scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+th, td { text-align: left; padding: 4px 6px; white-space: nowrap; font-family: var(--mono); }
+th { color: var(--muted); font-weight: 500; font-size: 10px; border-bottom: 1px solid var(--border); }
+td { border-bottom: 1px solid var(--row-border); }
+tbody tr:hover { background: var(--hover-row); }
+tbody tr:last-child td { border-bottom: none; }
+.tag { display: inline-flex; align-items: center; padding: 0 7px; border-radius: 999px;
+  font-size: 10px; font-weight: 500; font-family: inherit; }
+.tag.friend { background: rgba(56, 189, 248, 0.12); color: var(--friend); }
+.tag.threat { background: rgba(248, 113, 113, 0.12); color: var(--threat); }
+.tag.resource { background: rgba(245, 180, 60, 0.12); color: var(--resource); }
+.tag.core { background: rgba(167, 139, 250, 0.14); color: var(--core); }
+.tag.neutral { background: var(--chip); color: var(--muted); }
+.empty { color: var(--muted); font-size: 11.5px; padding: 6px 0; }
+
+/* 本帧计划：紧凑指令列表 */
+.plan-list { display: flex; flex-direction: column; gap: 3px; max-height: 180px; overflow-y: auto; }
+.plan-item {
+  display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 6px;
+  font-size: 11.5px; font-family: var(--mono);
+}
+.plan-item:hover { background: var(--hover-row); }
+.plan-item .verb { font-weight: 600; }
+.plan-item .verb.move { color: var(--friend); }
+.plan-item .verb.shoot { color: var(--warn); }
+.plan-item .verb.sweep { color: var(--warn); }
+.plan-item .verb.harvest, .plan-item .verb.deposit, .plan-item .verb.heal { color: var(--ok); }
+.plan-item .verb.wait { color: var(--muted); }
+.plan-item .right { margin-left: auto; display: flex; gap: 10px; align-items: baseline; }
+.plan-item .target { color: var(--muted); }
+.plan-item .eta { font-size: 10.5px; color: var(--muted); }
+.plan-item .eta.now { color: var(--ok); }
+.plan-item .eta.slow { color: var(--warn); }
+
+/* 动态日志流 */
+.log-stream { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; }
+.log-line { display: flex; gap: 8px; align-items: baseline; padding: 2px 6px; border-radius: 5px;
+  font-size: 11px; font-family: var(--mono); }
+.log-line .ltick { color: var(--muted); opacity: 0.7; }
+.log-line .lmsg { color: var(--fg); }
+.log-line .lms { margin-left: auto; color: var(--muted); }
+.log-line .lms.slow { color: var(--warn); font-weight: 600; }
+.event-stream { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; }
+.ev-line { display: flex; gap: 8px; align-items: baseline; padding: 2px 6px; border-radius: 5px;
+  font-size: 11px; font-family: var(--mono); }
+.ev-line:hover { background: var(--hover-row); }
+.ev-line .ltick { color: var(--muted); opacity: 0.7; }
+.ev-type { font-weight: 600; }
+.ev-type.threat { color: var(--threat); }
+.ev-type.resource { color: var(--ok); }
+.ev-type.warn { color: var(--warn); }
+.ev-type.accent { color: var(--accent); }
+.ev-type.neutral { color: var(--muted); }
+.ev-who, .ev-reason, .ev-pos { color: var(--muted); }
+.ev-dmg { color: var(--threat); font-weight: 600; }
+
+/* 手动探测 */
+.probe-panel {
+  position: fixed; top: 52px; right: 14px; width: 340px; max-width: calc(100vw - 28px);
+  z-index: 60; background: var(--glass-strong); backdrop-filter: blur(10px);
+  border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  padding: 12px 14px;
+}
+.probe-head { display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+.probe-head button { border: none; background: var(--card2); color: var(--muted); width: 22px; height: 22px;
+  border-radius: 6px; cursor: pointer; font-size: 13px; line-height: 1; }
+.probe-row { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0;
+  border-bottom: 1px solid var(--row-border); font-size: 11.5px; }
+.probe-row .k { color: var(--muted); }
+.probe-row .v { text-align: right; font-family: var(--mono); word-break: break-all; }
+.probe-row .ok { color: var(--ok); }
+.probe-row .bad { color: var(--danger); }
+.probe-verdict { margin-top: 8px; padding: 7px 10px; border-radius: 8px; font-size: 11.5px;
+  background: var(--card2); }
+
+@media (max-width: 1100px) {
+  body { overflow: auto; }
+  .page { height: auto; }
+  .workspace { grid-template-columns: 1fr; }
+  .map-col { min-height: 520px; }
+  .side { min-height: 420px; }
+  .map-toolbar .hint { display: none; }
+}
+</style>
 </head>
 <body>
-<main id="app">Arena Hero 数据面板（加载中…）</main>
+<div class="page">
+<header class="topbar">
+  <div class="brand">
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/>
+      </svg>
+    </div>
+    <div>
+      <h1>Arena Hero</h1>
+      <div class="sub">自动战术监控</div>
+    </div>
+  </div>
+  <div class="hud" id="hud"></div>
+  <div class="top-controls">
+    <button type="button" id="probe-btn" class="ctl-btn">手动探测</button>
+    <span class="ctl">TICK <b id="tick" class="mono">—</b></span>
+    <span class="ctl mono" id="updated">等待数据…</span>
+    <span class="ctl"><span id="status-dot" class="dot bad"></span><span id="status-text">离线</span></span>
+  </div>
+</header>
+
+<div class="probe-panel" id="probe-panel" hidden>
+  <div class="probe-head">手动探测 <button type="button" id="probe-close" aria-label="关闭">×</button></div>
+  <div id="probe-body"></div>
+</div>
+
+<main class="workspace">
+  <section class="map-col">
+    <div class="map-wrap">
+      <div class="map-toolbar">
+        <button type="button" id="fit-btn">适应视图</button>
+        <span class="hint">拖拽平移 · 滚轮缩放 · 双击复位 · 悬停显示图例</span>
+      </div>
+      <canvas id="map" role="img" aria-label="已探索地图与单位/资源/威胁分布"></canvas>
+      <div class="tip" id="tip"></div>
+      <div class="legend">
+        <span><i style="background:var(--explored);border:1px solid var(--border)"></i>已探索</span>
+        <span><i style="background:var(--obstacle)"></i>障碍</span>
+        <span><i class="circle" style="background:var(--resource)"></i>资源点</span>
+        <span><i class="circle" style="background:var(--cargo)"></i>掉落货</span>
+        <span><i style="background:var(--friend)"></i>己方</span>
+        <span><i style="background:transparent;border:1.5px dashed var(--friend)"></i>己方轨迹</span>
+        <span><i style="background:var(--threat)"></i>敌方/威胁</span>
+        <span><i style="background:var(--core)"></i>Core</span>
+      </div>
+    </div>
+    <div class="log-drawer" id="log-drawer">
+      <div class="log-bar" id="log-toggle">
+        <span class="drawer-toggle">▸</span>
+        <span class="log-title">逐帧追踪</span>
+        <span class="log-count mono" id="log-count">0</span>
+        <div class="pills" id="log-pills"></div>
+      </div>
+      <div class="log-body" id="log-body" hidden>
+        <div class="scroll">
+          <table id="log-table"><thead><tr><th>tick</th><th>单位</th><th>当前位置</th><th>下一步</th><th>动作</th><th>HP</th><th>货</th><th>职责</th></tr></thead>
+          <tbody><tr><td colspan="8" class="empty">暂无记录</td></tr></tbody></table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <aside class="side">
+    <div class="core-panel" id="core-panel">
+      <div class="core-head">
+        <span class="core-title">CORE</span>
+        <span class="core-pos mono" id="core-pos">—</span>
+        <span class="core-state" id="core-state">—</span>
+      </div>
+      <div class="bar-row"><span class="bar-label">HP</span><div class="segs" id="core-hp-segs"></div><span class="bar-val mono" id="core-hp-val">—</span></div>
+      <div class="bar-row"><span class="bar-label">盾</span><div class="segs" id="core-shield-segs"></div><span class="bar-val mono" id="core-shield-val">—</span></div>
+      <div class="core-meta mono" id="core-meta">—</div>
+    </div>
+    <div class="side-scroll">
+      <section class="panel" id="plan-panel"><h2>本帧指令队列 <span class="cnt" id="plan-count">0</span></h2><div class="plan-list" id="plan-list"><div class="empty">—</div></div></section>
+      <section class="panel" id="units-panel"><h2>单位 <span class="cnt" id="units-count">0</span></h2><div class="scroll" id="units-body"></div></section>
+      <section class="panel" id="enemies-panel"><h2>敌方与威胁 <span class="cnt" id="enemies-count">0</span></h2><div class="scroll" id="enemies-body"></div></section>
+      <section class="panel" id="resources-panel"><h2>资源 <span class="cnt" id="resources-count">0</span></h2><div class="scroll" id="resources-body"></div></section>
+      <section class="panel" id="history-panel"><h2>系统动态 <span class="cnt" id="history-count">0</span></h2><div class="log-stream" id="history-body"></div></section>
+      <section class="panel" id="events-panel"><h2>事件流 <span class="cnt" id="events-count">0</span></h2><div class="event-stream" id="events-body"></div></section>
+    </div>
+  </aside>
+</main>
+</div>
+
+<script>
+"use strict";
+const canvas = document.getElementById("map");
+const ctx = canvas.getContext("2d");
+let data = null;
+let base = null;
+let view = { scale: 1, x: 0, y: 0 };
+let viewTouched = false;
+let hover = null;
+let hoverUnit = null;
+let dragging = null;
+let lastNewAt = 0;
+let lastNewLabel = "";
+let logFilter = "";
+
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+async function poll() {
+  const sinceM = data && typeof data._mtime === "number" ? data._mtime : 0;
+  try {
+    const r = await fetch("/api/data?since_mtime=" + sinceM, { cache: "no-store" });
+    if (!r.ok) throw new Error("http " + r.status);
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    const isNew = !data || d._mtime !== data._mtime;
+    data = d;
+    document.getElementById("tick").textContent = d.tick;
+    setStatus(isNew ? "ok" : "wait", isNew ? "在线" : "等待下一帧…");
+    if (isNew) {
+      lastNewAt = Date.now();
+      lastNewLabel = new Date().toLocaleTimeString();
+      document.getElementById("updated").textContent = lastNewLabel;
+      layout();
+      renderAll();
+      drawMap();
+    }
+  } catch (e) {
+    data = null;
+    document.getElementById("updated").textContent = "等待数据…（请先运行 arena-hero-agent）";
+    setStatus("bad", "离线");
+  }
+  setTimeout(poll, 1000);
+}
+poll();
+setInterval(() => {
+  if (lastNewAt && data) {
+    const secs = Math.max(0, Math.round((Date.now() - lastNewAt) / 1000));
+    document.getElementById("updated").textContent = `${lastNewLabel} · ${secs}s 前`;
+  }
+}, 1000);
+
+function setStatus(state, text) {
+  const dot = document.getElementById("status-dot");
+  dot.className = "dot " + (state === "ok" ? "ok" : state === "bad" ? "bad" : "");
+  document.getElementById("status-text").textContent = text;
+}
+
+function mem() { return data.memory; }
+
+const DIR_DELTA = { UP: [0, -1], DOWN: [0, 1], LEFT: [-1, 0], RIGHT: [1, 0] };
+
+function threats() {
+  const out = {};
+  for (const s of (mem().enemy_sightings || [])) {
+    out[s.id] = { enemy_id: s.id, kind: s.kind, unit_type: s.unit_type,
+      positions: [s.position], stationary: !!s.stationary,
+      last_seen_tick: s.last_seen_tick, hp: null };
+  }
+  for (const g of (mem().threat_ghosts || [])) {
+    out[g.id] = { enemy_id: g.id, kind: "UNIT", unit_type: g.unit_type,
+      positions: [g.position], stationary: false,
+      last_seen_tick: data.tick, hp: null, expires_tick: g.expires_tick };
+  }
+  return out;
+}
+
+function renderAll() {
+  renderHud();
+  renderCore();
+  renderPlan();
+  renderUnits();
+  renderEnemies();
+  renderResources();
+  renderHistory();
+  renderEvents();
+  renderLogs();
+}
+
+function renderHud() {
+  const m = mem();
+  const items = [
+    ["单位", data.units.length, ""],
+    ["敌人", data.visible_enemies.length, data.visible_enemies.length > 0 ? "danger" : ""],
+    ["威胁", Object.keys(threats()).length, Object.keys(threats()).length > 0 ? "danger" : ""],
+    ["资源", Object.keys(m.resources || {}).length, "warn"],
+    ["动作", Object.keys(data.plan.unit_actions || {}).length, "accent"],
+  ];
+  document.getElementById("hud").innerHTML = items.map(([label, v, cls]) =>
+    `<div class="hud-item ${cls}"><span class="hud-label">${label}</span><span class="hud-value mono">${v}</span></div>`
+  ).join("");
+}
+
+function segs(container, hp, max, shield) {
+  const el = document.getElementById(container);
+  el.innerHTML = Array.from({ length: max }, (_, i) =>
+    `<div class="seg ${i < hp ? "on" + (shield ? " shield" : "") : ""}"></div>`
+  ).join("");
+}
+
+function renderCore() {
+  const c = data.core;
+  if (!c) {
+    document.getElementById("core-pos").textContent = "—";
+    document.getElementById("core-state").textContent = "重生中";
+    segs("core-hp-segs", 0, 5, false);
+    segs("core-shield-segs", 0, 5, true);
+    document.getElementById("core-hp-val").textContent = "—";
+    document.getElementById("core-shield-val").textContent = "—";
+    document.getElementById("core-meta").textContent = "Core 缺失（重生/入场中）";
+    return;
+  }
+  document.getElementById("core-pos").textContent = `(${c.position})`;
+  const stateEl = document.getElementById("core-state");
+  stateEl.textContent = c.state === "MOVING" ? `迁移中 ${c.destination || ""}` : "NORMAL";
+  stateEl.className = "core-state" + (c.state === "MOVING" ? " moving" : "");
+  segs("core-hp-segs", c.hp, 5, false);
+  segs("core-shield-segs", c.shield, 5, true);
+  document.getElementById("core-hp-val").textContent = `${c.hp}/5`;
+  document.getElementById("core-shield-val").textContent = `${c.shield}/5`;
+  document.getElementById("core-meta").textContent =
+    `资源 ${data.resources ?? "—"}/${data.resource_capacity ?? "—"} · 余量 ${data.resource_space ?? "—"}`;
+}
+
+function renderPlan() {
+  const pa = data.plan.unit_actions || {};
+  const list = document.getElementById("plan-list");
+  const units = new Map(data.units.map(u => [u.id, u]));
+  document.getElementById("plan-count").textContent = Object.keys(pa).length;
+  if (!Object.keys(pa).length) {
+    list.innerHTML = '<div class="empty">无动作</div>';
+  } else {
+    list.innerHTML = Object.entries(pa).map(([uid, a]) => {
+      const u = units.get(uid);
+      const verb = ((a && a.type) || "WAIT").toLowerCase();
+      const target = (a && (a.direction || a.unit_type)) || "";
+      return `<div class="plan-item">
+        <span class="tag ${u ? "friend" : "neutral"}">${u ? u.unit_type : "?"}</span>
+        <span class="mono">${uid.slice(0, 6)}</span>
+        <span class="verb ${verb}">${(a && a.type) || "WAIT"}</span>
+        <span class="right"><span class="target mono">${target}</span>${etaFor(u, a)}</span>
+      </div>`;
+    }).join("");
+  }
+  if (data.plan.core_action) {
+    const ca = data.plan.core_action;
+    const verb = (ca.type || "NONE").toLowerCase();
+    const target = ca.direction || ca.unit_type || "";
+    list.insertAdjacentHTML("beforeend",
+      `<div class="plan-item"><span class="tag core">CORE</span><span class="verb ${verb}">${ca.type || "NONE"}</span><span class="right"><span class="target mono">${target}</span><span class="eta now">本帧</span></span></div>`);
+  }
+}
+
+const TICK_SECONDS = 15;
+function etaFor(u, action) {
+  if (!action || action.type !== "MOVE") return '<span class="eta now">本帧</span>';
+  let tgt = null;
+  if (action.direction && DIR_DELTA[action.direction]) {
+    const d = DIR_DELTA[action.direction];
+    tgt = [u.position[0] + d[0], u.position[1] + d[1]];
+  } else {
+    tgt = (data.tactic.worker_targets || {})[u.id];
+  }
+  if (!tgt) return '<span class="eta">?帧</span>';
+  const dist = Math.abs(u.position[0] - tgt[0]) + Math.abs(u.position[1] - tgt[1]);
+  if (dist === 0) return '<span class="eta now">本帧</span>';
+  const secs = dist * TICK_SECONDS;
+  return `<span class="eta ${secs > 60 ? "slow" : ""}">≈${dist}帧 · ${secs}s</span>`;
+}
+
+function tableRows(headers, rows) {
+  if (!rows) return '<div class="empty">无</div>';
+  return `<table><thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
+function renderUnits() {
+  const rows = data.units.map(u => `<tr>
+    <td><span class="tag friend">${u.unit_type}</span></td>
+    <td>${u.id.slice(0, 8)}</td><td>(${u.position})</td><td>${u.hp}</td><td>${u.cargo || 0}</td>
+    <td>${roleOf(u.id)}</td></tr>`).join("");
+  document.getElementById("units-count").textContent = data.units.length;
+  document.getElementById("units-body").innerHTML = tableRows(
+    ["类型", "ID", "位置", "HP", "货", "职责"], rows);
+}
+
+function renderEnemies() {
+  const visible = (data.visible_enemies || []).map(e => `<tr>
+    <td><span class="tag threat">${e.kind === "CORE" ? "CORE" : e.unit_type}</span></td>
+    <td>${e.id.slice(0, 8)}</td><td>(${e.position})</td><td>${e.hp}</td></tr>`).join("");
+  const ghosts = Object.values(threats()).filter(t =>
+    !(data.visible_enemies || []).some(e => e.id === t.enemy_id)
+  ).map(t => `<tr>
+    <td><span class="tag threat">${t.kind === "CORE" ? "CORE" : t.unit_type || "?"}</span></td>
+    <td>${t.enemy_id.slice(0, 8)}</td><td>(${t.positions.at(-1)})</td><td>${t.hp}</td>
+    <td>${t.stationary ? "静止" : "活跃"}</td><td>${data.tick - t.last_seen_tick}帧前</td></tr>`).join("");
+  const count = data.visible_enemies.length + ghosts.length;
+  document.getElementById("enemies-count").textContent = count;
+  const body = (visible ? tableRows(["类型", "ID", "位置", "HP"], visible) : "") +
+    (ghosts ? tableRows(["记忆", "ID", "位置", "HP", "状态", "时长"], ghosts) : "");
+  document.getElementById("enemies-body").innerHTML = body || '<div class="empty">无威胁记忆</div>';
+}
+
+function renderResources() {
+  const m = mem();
+  const rows = Object.values(m.resources || {}).map(r => `<tr>
+    <td><span class="tag resource">${r.source === "CARGO" ? "掉落" : "资源点"}</span></td>
+    <td>(${r.position})</td><td>第${r.first_seen_tick}帧</td>
+    <td>${r.confirmed_empty ? "已消耗" : "可用"}</td></tr>`).join("");
+  document.getElementById("resources-count").textContent = Object.keys(m.resources || {}).length;
+  document.getElementById("resources-body").innerHTML = tableRows(
+    ["来源", "位置", "发现", "状态"], rows);
+}
+
+function renderHistory() {
+  const rows = (data.history || []).map(h => {
+    return `<div class="log-line">
+      <span class="ltick">t${h.tick}</span>
+      <span class="lmsg">${h.text}</span>
+    </div>`;
+  }).join("");
+  document.getElementById("history-count").textContent = (data.history || []).length;
+  document.getElementById("history-body").innerHTML =
+    rows || '<div class="empty">暂无动态</div>';
+}
+
+function renderEvents() {
+  const rows = [...(data.event_log || [])].reverse().slice(0, 150);
+  document.getElementById("events-count").textContent = rows.length;
+  const cls = t => {
+    if (/DAMAGED|DESTROYED|SELF_DESTRUCT/.test(t)) return "threat";
+    if (/SUCCEEDED/.test(t)) return "resource";
+    if (/FAILED|CORE_RESOURCE|UPKEEP/.test(t)) return "warn";
+    if (/SHOT|SWEEP/.test(t)) return "accent";
+    return "neutral";
+  };
+  document.getElementById("events-body").innerHTML = rows.map(e => {
+    const parts = [
+      `<span class="ltick">t${e.tick}</span>`,
+      `<span class="ev-type ${cls(e.type)}">${e.type}</span>`,
+    ];
+    if (e.reason) parts.push(`<span class="ev-reason">${e.reason}</span>`);
+    if (e.actor || e.target) {
+      parts.push(`<span class="ev-who">${e.actor || ""}${e.target ? "→" + e.target : ""}</span>`);
+    }
+    if (e.pos) parts.push(`<span class="ev-pos">(${e.pos})</span>`);
+    if (e.damage !== undefined && e.damage !== null) {
+      parts.push(`<span class="ev-dmg">-${e.damage}</span>`);
+    }
+    return `<div class="ev-line">${parts.join("")}</div>`;
+  }).join("") || '<div class="empty">暂无事件</div>';
+}
+
+function roleOf(uid) {
+  return (data.tactic.worker_modes || {})[uid] || "—";
+}
+
+function renderLogs() {
+  if (!data) return;
+  const rows = [...(data.tick_log || [])].reverse().slice(0, 400);
+  const units = [...new Set(rows.map(r => r.unit_id))];
+  const pills = document.getElementById("log-pills");
+  pills.innerHTML = `<button type="button" class="pill-btn ${!logFilter ? "is-active" : ""}" data-unit="">全部</button>` +
+    units.map(id => `<button type="button" class="pill-btn ${logFilter === id ? "is-active" : ""}" data-unit="${id}">${id.slice(0, 6)}</button>`).join("");
+  const list = logFilter ? rows.filter(r => r.unit_id === logFilter) : rows;
+  document.getElementById("log-count").textContent = list.length;
+  const body = list.map(r => `<tr>
+    <td>${r.tick}</td>
+    <td><span class="tag friend">${r.unit_type}</span> ${r.unit_id.slice(0, 6)}</td>
+    <td>(${r.pos})</td><td>${r.next ? "→ (" + r.next + ")" : "—"}</td>
+    <td>${r.action ? `<span class="tag neutral">${r.action}</span>` : "—"}</td>
+    <td>${r.hp}</td><td>${r.cargo || 0}</td><td>${r.role || "—"}</td>
+  </tr>`).join("");
+  document.getElementById("log-table").innerHTML =
+    `<thead><tr><th>tick</th><th>单位</th><th>当前位置</th><th>下一步</th><th>动作</th><th>HP</th><th>货</th><th>职责</th></tr></thead>
+     <tbody>${body || '<tr><td colspan="8" class="empty">暂无记录</td></tr>'}</tbody>`;
+}
+
+document.getElementById("log-pills").addEventListener("click", e => {
+  const btn = e.target.closest(".pill-btn");
+  if (!btn) return;
+  logFilter = btn.dataset.unit || "";
+  renderLogs();
+});
+
+document.getElementById("log-toggle").addEventListener("click", () => {
+  const drawer = document.getElementById("log-drawer");
+  const open = drawer.classList.toggle("open");
+  document.getElementById("log-body").hidden = !open;
+});
+
+/* ---- 地图 ---- */
+function layout() {
+  const m = mem();
+  const pts = [];
+  for (const p of m.explored || []) pts.push(p);
+  for (const p of m.obstacles || []) pts.push(p);
+  for (const k in (m.resources || {})) pts.push(m.resources[k].position);
+  for (const e of data.visible_enemies || []) pts.push(e.position);
+  for (const t of Object.values(threats())) if (t.positions.length) pts.push(t.positions.at(-1));
+  for (const u of data.units || []) pts.push(u.position);
+  if (data.core) pts.push(data.core.position);
+  if (!pts.length) { base = null; return; }
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  const minX = Math.min(...xs) - 2, maxX = Math.max(...xs) + 2;
+  const minY = Math.min(...ys) - 2, maxY = Math.max(...ys) + 2;
+  const cols = maxX - minX + 1, rows = maxY - minY + 1;
+  const rect = canvas.getBoundingClientRect();
+  const cell = Math.max(3, Math.min(17,
+    Math.floor(rect.width / cols), Math.floor(rect.height / rows)));
+  base = {
+    minX, minY, cell,
+    ox: Math.floor((rect.width - cols * cell) / 2),
+    oy: Math.floor((rect.height - rows * cell) / 2),
+  };
+  if (!viewTouched) view = { scale: 1, x: 0, y: 0 };
+}
+
+function sx(wx) { return base.ox + (wx - base.minX) * base.cell * view.scale + view.x; }
+function sy(wy) { return base.oy + (wy - base.minY) * base.cell * view.scale + view.y; }
+function cellPx() { return base.cell * view.scale; }
+
+function drawMap() {
+  if (!data || !base) { ctx.clearRect(0, 0, canvas.width, canvas.height); return; }
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+  canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = css("--bg2");
+  ctx.fillRect(0, 0, rect.width, rect.height);
+
+  const m = mem();
+  const cpx = cellPx();
+  const obstacleSet = new Set((m.obstacles || []).map(p => p.join(",")));
+
+  ctx.fillStyle = css("--explored");
+  for (const p of m.explored || []) {
+    if (obstacleSet.has(p.join(","))) continue;
+    ctx.fillRect(sx(p[0]), sy(p[1]), cpx + 0.5, cpx + 0.5);
+  }
+
+  if (cpx >= 6) {
+    ctx.strokeStyle = css("--grid");
+    ctx.lineWidth = 1;
+    const gx0 = Math.floor(base.minX), gy0 = Math.floor(base.minY);
+    const gx1 = gx0 + Math.ceil(rect.width / cpx) + 2;
+    const gy1 = gy0 + Math.ceil(rect.height / cpx) + 2;
+    for (let gx = gx0; gx <= gx1; gx++) {
+      ctx.beginPath(); ctx.moveTo(sx(gx), 0); ctx.lineTo(sx(gx), rect.height); ctx.stroke();
+    }
+    for (let gy = gy0; gy <= gy1; gy++) {
+      ctx.beginPath(); ctx.moveTo(0, sy(gy)); ctx.lineTo(rect.width, sy(gy)); ctx.stroke();
+    }
+  }
+
+  ctx.fillStyle = css("--obstacle");
+  for (const p of m.obstacles || []) {
+    ctx.fillRect(sx(p[0]), sy(p[1]), cpx + 0.5, cpx + 0.5);
+    ctx.strokeStyle = css("--obstacle-edge");
+    ctx.lineWidth = 1;
+    ctx.strokeRect(sx(p[0]) + 0.5, sy(p[1]) + 0.5, cpx - 0.5, cpx - 0.5);
+  }
+
+  for (const k in (m.resources || {})) {
+    const r = m.resources[k];
+    if (r.confirmed_empty) continue;
+    const p = r.position;
+    const cx = sx(p[0]) + cpx / 2, cy = sy(p[1]) + cpx / 2;
+    const rr = Math.max(3, cpx * 0.3);
+    ctx.fillStyle = r.source === "CARGO" ? css("--cargo") : css("--resource");
+    ctx.shadowColor = r.source === "CARGO" ? css("--cargo") : css("--resource");
+    ctx.shadowBlur = 6;
+    ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = css("--bg2"); ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = css("--threat");
+  ctx.globalAlpha = 0.4;
+  ctx.lineWidth = 1.5;
+  ctx.lineJoin = "round";
+  for (const t of Object.values(threats())) {
+    if (t.positions.length < 2) continue;
+    const trail = t.positions.slice(-5);
+    ctx.beginPath();
+    ctx.moveTo(sx(trail[0][0]) + cpx / 2, sy(trail[0][1]) + cpx / 2);
+    for (let i = 1; i < trail.length; i++) {
+      ctx.lineTo(sx(trail[i][0]) + cpx / 2, sy(trail[i][1]) + cpx / 2);
+    }
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // 己方单位历史轨迹
+  ctx.strokeStyle = css("--friend");
+  ctx.globalAlpha = 0.3;
+  ctx.lineWidth = 1.5;
+  ctx.lineJoin = "round";
+  for (const uid in (mem().trajectories || {})) {
+    const tr = mem().trajectories[uid];
+    if (tr.length < 2) continue;
+    ctx.beginPath();
+    ctx.moveTo(sx(tr[0][0]) + cpx / 2, sy(tr[0][1]) + cpx / 2);
+    for (let i = 1; i < tr.length; i++) {
+      ctx.lineTo(sx(tr[i][0]) + cpx / 2, sy(tr[i][1]) + cpx / 2);
+    }
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  for (const e of data.visible_enemies || []) drawEntity(e.position, e.kind === "CORE" ? "core" : e.unit_type, "threat", e.hp);
+  for (const t of Object.values(threats())) {
+    if (!t.positions.length) continue;
+    if ((data.visible_enemies || []).some(e => e.id === t.enemy_id)) continue;
+    drawEntity(t.positions.at(-1), t.kind === "CORE" ? "core" : t.unit_type || "RANGER",
+      t.stationary ? "threat-dim" : "threat", t.hp);
+  }
+  for (const u of data.units || []) drawEntity(u.position, u.unit_type, "friend", u.hp);
+  if (data.core) drawEntity(data.core.position, "CORE", "core", data.core.hp);
+
+  for (const u of data.units || []) {
+    const a = (data.plan.unit_actions || {})[u.id];
+    if (!a || a.type !== "MOVE") continue;
+    let target = null;
+    if (a.direction && DIR_DELTA[a.direction]) {
+      const d = DIR_DELTA[a.direction];
+      target = [u.position[0] + d[0], u.position[1] + d[1]];
+    } else {
+      target = a.position || (data.tactic.worker_targets || {})[u.id];
+    }
+    if (!target) continue;
+    const x0 = sx(u.position[0]) + cpx / 2, y0 = sy(u.position[1]) + cpx / 2;
+    const x1 = sx(target[0]) + cpx / 2, y1 = sy(target[1]) + cpx / 2;
+    const ang = Math.atan2(y1 - y0, x1 - x0);
+    ctx.strokeStyle = css("--friend");
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x1 - 4.5 * Math.cos(ang - 0.45), y1 - 4.5 * Math.sin(ang - 0.45));
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x1 - 4.5 * Math.cos(ang + 0.45), y1 - 4.5 * Math.sin(ang + 0.45));
+    ctx.stroke();
+  }
+
+  // 悬停单位：显示名称 + 类型标签
+  if (hoverUnit) {
+    if (hoverUnit.kind) {
+      drawUnitLabel(
+        hoverUnit.position,
+        `${hoverUnit.kind === "CORE" ? "CORE" : hoverUnit.unit_type} · ${hoverUnit.id.slice(0, 6)}`,
+        "threat",
+      );
+    } else {
+      drawUnitLabel(hoverUnit.position, `${hoverUnit.unit_type} · ${hoverUnit.id.slice(0, 6)}`);
+    }
+  }
+
+  if (hover && cpx >= 4) {
+    ctx.strokeStyle = css("--hover");
+    ctx.lineWidth = 2;
+    ctx.strokeRect(sx(hover.wx) + 1.5, sy(hover.wy) + 1.5, cpx - 3, cpx - 3);
+  }
+}
+
+const MAX_HP = { WORKER: 2, VANGUARD: 4, RANGER: 2, CORE: 5 };
+
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function drawEntity(pos, kind, colorVar, hp) {
+  const cpx = cellPx();
+  const cx = sx(pos[0]) + cpx / 2, cy = sy(pos[1]) + cpx / 2;
+  const r = Math.max(3, cpx * 0.32);
+  const fill = css("--" + colorVar);
+  ctx.shadowColor = fill;
+  ctx.shadowBlur = cpx >= 6 ? 5 : 0;
+  ctx.strokeStyle = css("--bg2"); ctx.lineWidth = 1.5;
+  ctx.fillStyle = fill;
+  if (kind === "WORKER") {
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  } else if (kind === "VANGUARD") {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r, cy + r * 0.8); ctx.lineTo(cx - r, cy + r * 0.8);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  } else if (kind === "RANGER") {
+    const s = r * 1.1;
+    rr(cx - s / 2, cy - s / 2, s, s, 2); ctx.fill(); ctx.stroke();
+  } else {
+    const s = r * 1.2;
+    rr(cx - s / 2, cy - s / 2, s, s, 3); ctx.fill(); ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
+  if (cpx >= 8 && hp !== undefined) {
+    const max = MAX_HP[kind] || 2;
+    const w = cpx * 0.82, h = 3.5;
+    const bx = cx - w / 2, by = cy - r - 6;
+    ctx.fillStyle = css("--bg2");
+    ctx.strokeStyle = css("--border"); ctx.lineWidth = 1;
+    rr(bx - 1, by - 1, w + 2, h + 2, 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = hp >= max * 0.5 ? css("--ok") : css("--threat");
+    rr(bx, by, w * Math.max(0, Math.min(1, hp / max)), h, 1.5); ctx.fill();
+  }
+}
+
+function drawUnitLabel(pos, text, colorVar) {
+  const cpx = cellPx();
+  const cx = sx(pos[0]) + cpx / 2, cy = sy(pos[1]) + cpx / 2;
+  const fs = Math.max(9, Math.min(12, cpx * 0.85));
+  ctx.font = `500 ${fs}px "SF Mono", ui-monospace, Menlo, Consolas, monospace`;
+  const w = ctx.measureText(text).width + 10;
+  const h = fs + 6;
+  const x = cx - w / 2, y = cy + cpx * 0.55;
+  ctx.globalAlpha = 0.78;
+  ctx.fillStyle = css("--bg2");
+  rr(x, y, w, h, 3);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = css(colorVar ? "--" + colorVar : "--fg");
+  ctx.fillText(text, x + 5, y + h - 3.5);
+}
+
+function worldAt(e) {
+  if (!base) return null;
+  const rect = canvas.getBoundingClientRect();
+  const wx = base.minX + Math.floor((e.clientX - rect.left - base.ox - view.x) / (base.cell * view.scale));
+  const wy = base.minY + Math.floor((e.clientY - rect.top - base.oy - view.y) / (base.cell * view.scale));
+  return { wx, wy };
+}
+
+canvas.addEventListener("mousedown", e => {
+  dragging = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
+  canvas.classList.add("dragging");
+  e.preventDefault();
+});
+window.addEventListener("mousemove", e => {
+  if (dragging) {
+    view.x = dragging.vx + (e.clientX - dragging.x);
+    view.y = dragging.vy + (e.clientY - dragging.y);
+    viewTouched = true;
+    drawMap();
+    return;
+  }
+  if (!data || !base) return;
+  const w = worldAt(e);
+  hover = w;
+  const atCell = p => p && p[0] === w.wx && p[1] === w.wy;
+  hoverUnit =
+    (data.units || []).find(u => atCell(u.position)) ||
+    (data.visible_enemies || []).find(e2 => atCell(e2.position)) ||
+    null;
+  drawMap();
+  const tip = document.getElementById("tip");
+  if (!w) { tip.textContent = ""; return; }
+  const here = [];
+  if (data.core && data.core.position[0] === w.wx && data.core.position[1] === w.wy) here.push("Core");
+  for (const u of data.units || []) if (u.position[0] === w.wx && u.position[1] === w.wy) here.push("己方 " + u.unit_type);
+  for (const e2 of data.visible_enemies || []) if (e2.position[0] === w.wx && e2.position[1] === w.wy) here.push("敌方 " + (e2.unit_type || "CORE"));
+  for (const k in (mem().resources || {})) {
+    const r = mem().resources[k];
+    if (!r.confirmed_empty && r.position[0] === w.wx && r.position[1] === w.wy) here.push(r.source === "CARGO" ? "掉落货" : "资源点");
+  }
+  tip.textContent = here.length ? `(${w.wx}, ${w.wy})：${here.join("、")}` : `(${w.wx}, ${w.wy})`;
+});
+window.addEventListener("mouseup", () => {
+  dragging = null;
+  canvas.classList.remove("dragging");
+});
+canvas.addEventListener("mouseleave", () => {
+  hover = null;
+  hoverUnit = null;
+  dragging = null;
+  canvas.classList.remove("dragging");
+  document.getElementById("tip").textContent = "";
+  drawMap();
+});
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  if (!base) return;
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const ns = Math.min(40, Math.max(0.15, view.scale * factor));
+  view.x = mx - (mx - view.x) * (ns / view.scale);
+  view.y = my - (my - view.y) * (ns / view.scale);
+  view.scale = ns;
+  viewTouched = true;
+  drawMap();
+}, { passive: false });
+canvas.addEventListener("dblclick", fit);
+document.getElementById("fit-btn").addEventListener("click", fit);
+
+/* 手动探测 */
+document.getElementById("probe-btn").addEventListener("click", async () => {
+  const panel = document.getElementById("probe-panel");
+  const body = document.getElementById("probe-body");
+  panel.hidden = false;
+  body.innerHTML = '<div class="probe-row"><span class="k">探测中…</span></div>';
+  try {
+    const r = await fetch("/api/probe", { cache: "no-store" });
+    const d = await r.json();
+    body.innerHTML = renderProbe(d);
+  } catch (e) {
+    body.innerHTML = `<div class="probe-row"><span class="k">探测失败</span><span class="v bad">${e}</span></div>`;
+  }
+});
+document.getElementById("probe-close").addEventListener("click", () => {
+  document.getElementById("probe-panel").hidden = true;
+});
+
+function renderProbe(d) {
+  const row = (k, v, cls) =>
+    `<div class="probe-row"><span class="k">${k}</span><span class="v ${cls || ""}">${v}</span></div>`;
+  const snap = d.snapshot;
+  let snapV, snapCls;
+  if (!snap.exists) { snapV = "无数据"; snapCls = "bad"; }
+  else if (snap.fresh) { snapV = `tick ${snap.tick} · ${snap.age_seconds}s 前`; snapCls = "ok"; }
+  else { snapV = `tick ${snap.tick} · 已 ${snap.age_seconds}s 无更新`; snapCls = "bad"; }
+  const bot = d.bot;
+  let botV, botCls;
+  if (!bot) { botV = "未检测到（独立模式 / bot 未运行）"; botCls = "bad"; }
+  else if (bot.last_activity_seconds_ago < 60) { botV = `PID ${bot.pid} · tick ${bot.last_tick ?? "—"} · 活跃（${bot.last_activity_seconds_ago}s 前）`; botCls = "ok"; }
+  else { botV = `PID ${bot.pid} · tick ${bot.last_tick ?? "—"} · 循环 ${bot.last_activity_seconds_ago}s 无活动`; botCls = "bad"; }
+  return row("探测时间", d.at) +
+    row("探测地址", d.target) +
+    row("本地数据", snapV, snapCls) +
+    row("Bot 进程", botV, botCls) +
+    row("DNS", d.dns.ok ? `解析 OK（${d.dns.ip}）` : `失败：${d.dns.error}`, d.dns.ok ? "ok" : "bad") +
+    row("TCP/TLS :443", d.tls.ok ? `连通（${d.tls.tls_version}）` : `失败：${d.tls.error}`, d.tls.ok ? "ok" : "bad") +
+    row("HTTP", d.http.ok ? `HTTP ${d.http.status}${d.http.status === 403 ? "（边缘可达）" : ""}` : `失败：${d.http.error}`, d.http.ok ? "ok" : "bad") +
+    row("WebSocket", d.ws.ok ? (d.ws.note || "可达") : `失败：${d.ws.error}`, d.ws.ok ? "ok" : "bad") +
+    row("WS 带鉴权", d.ws_auth.ok ? (d.ws_auth.note || "正常") : `失败：${d.ws_auth.error || d.ws_auth.note || ""}`, d.ws_auth.ok ? "ok" : "bad") +
+    `<div class="probe-verdict">${d.verdict}</div>`;
+}
+
+function fit() {
+  view = { scale: 1, x: 0, y: 0 };
+  viewTouched = false;
+  layout();
+  drawMap();
+}
+</script>
 </body>
 </html>
