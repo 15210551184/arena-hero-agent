@@ -334,6 +334,16 @@ class DashboardSnapshotTests(unittest.TestCase):
                 tick=tick,
                 units=[unit(WORKER_1, "WORKER", position)],
                 resource_cells=[(5, 5)] if tick == 2 else None,
+                events=[
+                    {
+                        "event_id": f"20000000-0000-4000-8000-{tick:012d}",
+                        "tick": tick,
+                        "event_type": "HARVEST_SUCCEEDED",
+                        "values": {"amount": 3},
+                    }
+                ]
+                if tick == 2
+                else None,
             )
             tactic.choose_actions(turn)
             memory.update(turn, tactic)
@@ -349,6 +359,15 @@ class DashboardSnapshotTests(unittest.TestCase):
         self.assertEqual(restored.resources_last_seen[(5, 5)], 2)
         self.assertEqual(restored.last_phase, memory.last_phase)
         self.assertEqual(restored.last_threat_level, memory.last_threat_level)
+        self.assertEqual(list(restored.event_log), list(memory.event_log))
+        self.assertEqual(list(restored.history), list(memory.history))
+        self.assertEqual(list(restored.tick_log), list(memory.tick_log))
+        self.assertEqual(
+            [row["type"] for row in restored.event_log],
+            ["HARVEST_SUCCEEDED"],
+        )
+        self.assertGreater(len(restored.history), 0)
+        self.assertGreater(len(restored.tick_log), 0)
 
     def test_memory_load_ignores_missing_or_corrupt_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

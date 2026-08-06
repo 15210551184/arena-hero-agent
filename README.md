@@ -91,9 +91,10 @@ ssh -L 8765:127.0.0.1:8765 user@host
 then open <http://127.0.0.1:8765>. Disable the dashboard with
 `--no-dashboard`; adjust the bind address/port with `--dashboard-host` and
 `--dashboard-port`. Dashboard memory (unit trajectories, explored cells, and
-resource memory) is persisted to `dashboard-memory.json` and restored on
-restart, so history survives container rebuilds when the file lives on a
-mounted volume (the Compose deployment mounts `./data` for this purpose).
+resource memory) plus the system-dynamics and event-stream records are
+persisted to `dashboard-memory.json` and restored on restart, so history
+survives container rebuilds when the file lives on a mounted volume (the
+Compose deployment mounts `./data` for this purpose).
 
 ### Docker Compose
 

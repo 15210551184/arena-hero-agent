@@ -455,6 +455,9 @@ class DashboardMemory:
                     f"{position[0]},{position[1]}": tick
                     for position, tick in self.resources_last_seen.items()
                 },
+                "tick_log": list(self.tick_log),
+                "event_log": list(self.event_log),
+                "history": list(self.history),
                 "last_phase": self.last_phase,
                 "last_threat_level": self.last_threat_level,
                 "last_recovery": self.last_recovery,
@@ -485,6 +488,15 @@ class DashboardMemory:
                 memory.resources_first_seen[_position_from_key(key)] = int(tick)
             for key, tick in payload.get("resources_last_seen", {}).items():
                 memory.resources_last_seen[_position_from_key(key)] = int(tick)
+            memory.tick_log = deque(
+                payload.get("tick_log", []), maxlen=memory.max_rows
+            )
+            memory.event_log = deque(
+                payload.get("event_log", []), maxlen=memory.max_rows
+            )
+            memory.history = deque(
+                payload.get("history", []), maxlen=memory.max_rows
+            )
             memory.last_phase = payload.get("last_phase")
             memory.last_threat_level = payload.get("last_threat_level")
             memory.last_recovery = payload.get("last_recovery")
