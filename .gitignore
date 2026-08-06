@@ -29,6 +29,8 @@ dist/
 *.log.*
 reports/
 state/
+snapshot.json
+state.json
 
 # Editors and operating systems
 .idea/

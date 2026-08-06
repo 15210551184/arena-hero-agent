@@ -9,6 +9,7 @@ RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin arena
 
 COPY pyproject.toml requirements-build.lock requirements.lock README.md LICENSE ./
 COPY arena_farmer.py arena_health.py arena_optimizer.py arena_supervisor.py arena_version_monitor.py ./
+COPY dashboard ./dashboard
 RUN python -m pip install --no-cache-dir --require-hashes -r requirements-build.lock \
     && python -m pip install --no-cache-dir --require-hashes -r requirements.lock \
     && python -m pip install --no-cache-dir --no-deps --no-build-isolation . \

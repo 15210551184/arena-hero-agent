@@ -42,6 +42,10 @@ services:
       - /tmp/arena-hero-heartbeat.json
       - --stale-turn-timeout-seconds
       - "150"
+      - --snapshot-file
+      - /tmp/arena-hero-snapshot.json
+    ports:
+      - "127.0.0.1:8765:8765"
 
 secrets:
   arena_hero_api_key:

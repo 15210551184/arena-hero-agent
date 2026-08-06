@@ -19,6 +19,10 @@ The main Agent requires only an Arena Hero API key. Configuration precedence is:
 | `--no-compatibility-marker` | off | Disable marker checks for local/container runs. |
 | `--heartbeat-file` | none | Write liveness metadata after each accepted Turn. |
 | `--stale-turn-timeout-seconds` | `0` | Exit with a transient failure after no accepted Turn; `0` disables. |
+| `--snapshot-file` | `./snapshot.json` | Atomically write dashboard snapshot JSON per accepted Turn. |
+| `--dashboard-port` | `8765` | Embedded dashboard port. |
+| `--dashboard-host` | `127.0.0.1` | Embedded dashboard bind address. |
+| `--no-dashboard` | off | Disable the embedded dashboard server. |
 
 The supported unattended profile is `--worker-target 12 --beacon-policy retreat`, yielding a maximum planned population of 19.
 

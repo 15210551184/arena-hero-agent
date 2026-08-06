@@ -76,6 +76,22 @@ The POSIX bootstrap auto-detects versioned Python 3.11+ commands. On systems
 whose `python3` is older, you can force one with
 `PYTHON_BIN="$(command -v python3.11)" sh scripts/bootstrap.sh`.
 
+### Light dashboard
+
+The Agent starts an embedded light-colored data dashboard on
+`127.0.0.1:8765` by default. It atomically writes `snapshot.json` after every
+accepted Turn, and the page shows the live map, HUD, units/enemies/resources,
+the queued plan, the event stream, and a network probe panel. For remote
+viewing, forward the port over SSH:
+
+```bash
+ssh -L 8765:127.0.0.1:8765 user@host
+```
+
+then open <http://127.0.0.1:8765>. Disable the dashboard with
+`--no-dashboard`; adjust the bind address/port with `--dashboard-host` and
+`--dashboard-port`.
+
 ### Docker Compose
 
 ```bash
