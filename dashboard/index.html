@@ -9,6 +9,7 @@
   color-scheme: light;
   --bg: #f2f4f8;
   --bg2: #e7ebf3;
+  --map-bg: #dfe6ef;
   --fg: #1a2233;
   --muted: #5d6b84;
   --card: #ffffff;
@@ -19,19 +20,19 @@
   --ok: #059669;
   --warn: #d97706;
   --danger: #dc2626;
-  --explored: #d7eedd;
-  --explored-edge: #a9d4b8;
+  --explored: rgba(110, 190, 140, 0.22);
+  --explored-edge: #5f9e78;
   --fog: rgba(30, 50, 80, 0.07);
-  --obstacle: #5b6675;
-  --obstacle-edge: #7a8595;
+  --obstacle: #6b7a92;
+  --obstacle-edge: #93a3ba;
   --unreachable: #d8dde6;
   --resource: #c9820b;
   --cargo: #ea580c;
   --threat: #dc2626;
   --threat-dim: #cf9b98;
-  --friend: #0284c7;
+  --friend: #0e7ac4;
   --core: #7c3aed;
-  --grid: rgba(30, 50, 80, 0.08);
+  --grid: rgba(30, 50, 80, 0.05);
   --hover: rgba(2, 132, 199, 0.22);
   --glow-cyan: rgba(8, 145, 178, 0.3);
   --glass: rgba(255, 255, 255, 0.85);
@@ -116,12 +117,17 @@ body {
   background: var(--bg2); border: 1px solid var(--border); border-radius: 14px;
   box-shadow: inset 0 0 60px rgba(34, 211, 238, 0.03);
 }
+.map-wrap::after {
+  content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(30, 50, 80, 0.10) 100%);
+}
 canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
 canvas.dragging { cursor: grabbing; }
 
 .map-toolbar {
   position: absolute; top: 10px; left: 10px; display: flex; gap: 8px; align-items: center;
-  background: var(--glass); backdrop-filter: blur(8px);
+  z-index: 2; background: var(--glass); backdrop-filter: blur(12px) saturate(1.3);
+  box-shadow: 0 4px 16px rgba(30, 50, 80, 0.12);
   border: 1px solid var(--border); border-radius: 9px; padding: 4px 5px;
 }
 .map-toolbar button {
@@ -131,14 +137,17 @@ canvas.dragging { cursor: grabbing; }
 .map-toolbar button:hover { border-color: var(--accent); color: var(--accent); }
 .map-toolbar .hint { color: var(--muted); font-size: 11px; padding: 0 3px; }
 .tip {
-  position: absolute; top: 10px; right: 10px; pointer-events: none;
-  background: var(--glass); backdrop-filter: blur(8px);
+  position: absolute; left: -999px; top: -999px; pointer-events: none; z-index: 2;
+  opacity: 0; transition: opacity 0.15s;
+  background: var(--glass); backdrop-filter: blur(12px) saturate(1.3);
+  box-shadow: 0 4px 16px rgba(30, 50, 80, 0.12);
   border: 1px solid var(--border); border-radius: 9px; padding: 6px 10px;
-  font-size: 11.5px; color: var(--muted); max-width: 280px; font-family: var(--mono);
+  font-size: 11px; color: var(--muted); max-width: 220px; font-family: var(--mono);
 }
 .legend {
   position: absolute; left: 10px; bottom: 10px; display: flex; flex-wrap: wrap; gap: 5px;
-  background: var(--glass); backdrop-filter: blur(8px);
+  z-index: 2; background: var(--glass); backdrop-filter: blur(12px) saturate(1.3);
+  box-shadow: 0 4px 16px rgba(30, 50, 80, 0.10);
   border: 1px solid var(--border); border-radius: 10px; padding: 7px 8px;
   font-size: 11px; color: var(--muted); max-width: calc(100% - 20px);
   opacity: 0; pointer-events: none; transition: opacity 0.2s;
@@ -419,6 +428,15 @@ let lastNewLabel = "";
 let logFilter = "";
 
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+let flowT = 0;
+let flowTimer = null;
+function tickFlow() {
+  flowT = (flowT + 1) % 240;
+  if (data && base && !document.hidden) drawMap();
+  flowTimer = setTimeout(tickFlow, 90);
+}
+tickFlow();
 
 async function poll() {
   const sinceM = data && typeof data._mtime === "number" ? data._mtime : 0;
@@ -795,7 +813,7 @@ function drawMap() {
   canvas.width = Math.max(1, Math.floor(rect.width * dpr));
   canvas.height = Math.max(1, Math.floor(rect.height * dpr));
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = css("--bg2");
+  ctx.fillStyle = css("--map-bg");
   ctx.fillRect(0, 0, rect.width, rect.height);
 
   const m = mem();
@@ -832,10 +850,12 @@ function drawMap() {
 
   ctx.fillStyle = css("--obstacle");
   for (const p of m.obstacles || []) {
-    ctx.fillRect(sx(p[0]), sy(p[1]), cpx + 0.5, cpx + 0.5);
+    const ox = sx(p[0]) + 0.5, oy = sy(p[1]) + 0.5, os = cpx - 1;
+    rr(ox, oy, os, os, Math.min(4, cpx * 0.18));
+    ctx.fill();
     ctx.strokeStyle = css("--obstacle-edge");
     ctx.lineWidth = 1;
-    ctx.strokeRect(sx(p[0]) + 0.5, sy(p[1]) + 0.5, cpx - 0.5, cpx - 0.5);
+    ctx.stroke();
   }
 
   for (const k in (m.resources || {})) {
@@ -871,9 +891,11 @@ function drawMap() {
 
   // 己方单位历史轨迹
   ctx.strokeStyle = css("--friend");
-  ctx.globalAlpha = 0.3;
-  ctx.lineWidth = 1.5;
+  ctx.globalAlpha = 0.45;
+  ctx.lineWidth = 2;
   ctx.lineJoin = "round";
+  ctx.setLineDash([6, 5]);
+  ctx.lineDashOffset = -flowT * 3;
   for (const uid in (mem().trajectories || {})) {
     const tr = mem().trajectories[uid];
     if (tr.length < 2) continue;
@@ -884,16 +906,17 @@ function drawMap() {
     }
     ctx.stroke();
   }
+  ctx.setLineDash([]);
   ctx.globalAlpha = 1;
 
-  for (const e of data.visible_enemies || []) drawEntity(e.position, e.kind === "CORE" ? "core" : e.unit_type, "threat", e.hp);
+  for (const e of data.visible_enemies || []) drawEntity(e.position, e.kind === "CORE" ? "CORE" : e.unit_type, "threat", e.hp, true);
   for (const t of Object.values(threats())) {
     if (!t.positions.length) continue;
     if ((data.visible_enemies || []).some(e => e.id === t.enemy_id)) continue;
     drawEntity(t.positions.at(-1), t.kind === "CORE" ? "core" : t.unit_type || "RANGER",
-      t.stationary ? "threat-dim" : "threat", t.hp);
+      t.stationary ? "threat-dim" : "threat", t.hp, true);
   }
-  for (const u of data.units || []) drawEntity(u.position, u.unit_type, "friend", u.hp);
+  for (const u of data.units || []) drawEntity(u.position, u.unit_type, "friend", u.hp, false, dirFor(u));
   if (data.core) drawEntity(data.core.position, "CORE", "core", data.core.hp);
 
   for (const u of data.units || []) {
@@ -912,13 +935,26 @@ function drawMap() {
     const ang = Math.atan2(y1 - y0, x1 - x0);
     ctx.strokeStyle = css("--friend");
     ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    ctx.lineDashOffset = -flowT * 3;
     ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+    ctx.setLineDash([]);
     ctx.beginPath();
     ctx.moveTo(x1, y1);
     ctx.lineTo(x1 - 4.5 * Math.cos(ang - 0.45), y1 - 4.5 * Math.sin(ang - 0.45));
     ctx.moveTo(x1, y1);
     ctx.lineTo(x1 - 4.5 * Math.cos(ang + 0.45), y1 - 4.5 * Math.sin(ang + 0.45));
     ctx.stroke();
+  }
+
+  if (hoverUnit) {
+    const hx = sx(hoverUnit.position[0]) + cpx / 2, hy = sy(hoverUnit.position[1]) + cpx / 2;
+    ctx.strokeStyle = css("--accent");
+    ctx.lineWidth = 2;
+    ctx.shadowColor = css("--accent");
+    ctx.shadowBlur = 12;
+    ctx.beginPath(); ctx.arc(hx, hy, cpx * 0.55, 0, Math.PI * 2); ctx.stroke();
+    ctx.shadowBlur = 0;
   }
 
   // 悬停单位：显示名称 + 类型标签
@@ -953,16 +989,22 @@ function rr(x, y, w, h, r) {
   ctx.closePath();
 }
 
-function drawEntity(pos, kind, colorVar, hp) {
+function drawEntity(pos, kind, colorVar, hp, enemy, dir) {
   const cpx = cellPx();
   const cx = sx(pos[0]) + cpx / 2, cy = sy(pos[1]) + cpx / 2;
   const r = Math.max(3, cpx * 0.32);
   const fill = css("--" + colorVar);
   ctx.shadowColor = fill;
-  ctx.shadowBlur = cpx >= 6 ? 5 : 0;
-  ctx.strokeStyle = css("--bg2"); ctx.lineWidth = 1.5;
+  ctx.shadowBlur = cpx >= 6 ? (enemy ? 8 : 5) : 0;
+  ctx.strokeStyle = css("--map-bg"); ctx.lineWidth = 1.5;
   ctx.fillStyle = fill;
-  if (kind === "WORKER") {
+  if (enemy) {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + r * 1.1);
+    ctx.lineTo(cx - r * 1.15, cy - r * 0.85);
+    ctx.lineTo(cx + r * 1.15, cy - r * 0.85);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  } else if (kind === "WORKER") {
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
   } else if (kind === "VANGUARD") {
     ctx.beginPath();
@@ -972,20 +1014,42 @@ function drawEntity(pos, kind, colorVar, hp) {
     const s = r * 1.1;
     rr(cx - s / 2, cy - s / 2, s, s, 2); ctx.fill(); ctx.stroke();
   } else {
-    const s = r * 1.2;
-    rr(cx - s / 2, cy - s / 2, s, s, 3); ctx.fill(); ctx.stroke();
+    const s = r * 1.25;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - s); ctx.lineTo(cx + s, cy); ctx.lineTo(cx, cy + s); ctx.lineTo(cx - s, cy);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
   }
   ctx.shadowBlur = 0;
+  if (dir && !enemy) {
+    const L = r * 1.5;
+    const px = -dir[1], py = dir[0];
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + dir[0] * L + px * 2.5, cy + dir[1] * L + py * 2.5);
+    ctx.lineTo(cx + dir[0] * L - px * 2.5, cy + dir[1] * L - py * 2.5);
+    ctx.closePath();
+    ctx.fillStyle = css("--map-bg");
+    ctx.fill();
+  }
   if (cpx >= 8 && hp !== undefined) {
     const max = MAX_HP[kind] || 2;
-    const w = cpx * 0.82, h = 3.5;
-    const bx = cx - w / 2, by = cy - r - 6;
-    ctx.fillStyle = css("--bg2");
+    const w = cpx * 0.82, h = 4.5;
+    const bx = cx - w / 2, by = cy - r - 7;
+    const ratio = Math.max(0, Math.min(1, hp / max));
+    ctx.fillStyle = css("--map-bg");
     ctx.strokeStyle = css("--border"); ctx.lineWidth = 1;
     rr(bx - 1, by - 1, w + 2, h + 2, 2); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = hp >= max * 0.5 ? css("--ok") : css("--threat");
-    rr(bx, by, w * Math.max(0, Math.min(1, hp / max)), h, 1.5); ctx.fill();
+    ctx.fillStyle = ratio >= 0.5 ? css("--ok") : ratio >= 0.25 ? css("--warn") : css("--threat");
+    rr(bx, by, w * ratio, h, 1.5); ctx.fill();
   }
+}
+
+function dirFor(u) {
+  const a = (data.plan.unit_actions || {})[u.id];
+  if (a && a.type === "MOVE" && a.direction && DIR_DELTA[a.direction]) {
+    return DIR_DELTA[a.direction];
+  }
+  return null;
 }
 
 function drawUnitLabel(pos, text, colorVar) {
@@ -1036,7 +1100,10 @@ window.addEventListener("mousemove", e => {
     null;
   drawMap();
   const tip = document.getElementById("tip");
-  if (!w) { tip.textContent = ""; return; }
+  if (!w) { tip.textContent = ""; tip.style.opacity = "0"; return; }
+  const rect = canvas.getBoundingClientRect();
+  tip.style.left = (e.clientX - rect.left + 14) + "px";
+  tip.style.top = (e.clientY - rect.top + 14) + "px";
   const here = [];
   if (data.core && data.core.position[0] === w.wx && data.core.position[1] === w.wy) here.push("Core");
   for (const u of data.units || []) if (u.position[0] === w.wx && u.position[1] === w.wy) here.push("己方 " + zh(u.unit_type, UNIT_ZH));
@@ -1046,6 +1113,7 @@ window.addEventListener("mousemove", e => {
     if (!r.confirmed_empty && r.position[0] === w.wx && r.position[1] === w.wy) here.push(r.source === "CARGO" ? "掉落货" : "资源点");
   }
   tip.textContent = here.length ? `(${w.wx}, ${w.wy})：${here.join("、")}` : `(${w.wx}, ${w.wy})`;
+  tip.style.opacity = "1";
 });
 window.addEventListener("mouseup", () => {
   dragging = null;
@@ -1057,6 +1125,7 @@ canvas.addEventListener("mouseleave", () => {
   dragging = null;
   canvas.classList.remove("dragging");
   document.getElementById("tip").textContent = "";
+  document.getElementById("tip").style.opacity = "0";
   drawMap();
 });
 canvas.addEventListener("wheel", e => {
