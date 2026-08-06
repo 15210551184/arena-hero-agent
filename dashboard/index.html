@@ -363,7 +363,7 @@ tbody tr:last-child td { border-bottom: none; }
       <div class="tip" id="tip"></div>
       <div class="legend">
         <span><i style="background:var(--explored);border:1px solid var(--border)"></i>已探索</span>
-        <span><i style="background:var(--fog);border:1px dashed var(--border)"></i>未探索</span>
+        <span><i style="background:#000;border:1px dashed var(--border)"></i>未探索</span>
         <span><i style="background:var(--obstacle)"></i>障碍</span>
         <span><i class="circle" style="background:var(--resource)"></i>资源点</span>
         <span><i class="circle" style="background:var(--cargo)"></i>掉落货</span>
@@ -454,6 +454,7 @@ async function poll() {
       lastNewLabel = new Date().toLocaleTimeString();
       document.getElementById("updated").textContent = lastNewLabel;
       layout();
+      fogDirty = true;
       renderAll();
       drawMap();
     }
@@ -481,6 +482,100 @@ function setStatus(state, text) {
 function mem() { return data.memory; }
 
 const DIR_DELTA = { UP: [0, -1], DOWN: [0, 1], LEFT: [-1, 0], RIGHT: [1, 0] };
+const FOG_BLACK_R = 3.0;
+const FOG_GRAY_R = 4.5;
+
+let fogGray = null;
+let fogBlack = null;
+let fogBounds = null;
+let fogDirty = true;
+let lastRectW = 0;
+let lastRectH = 0;
+
+function fogSources() {
+  const pts = [];
+  for (const u of data.units || []) pts.push(u.position);
+  for (const e of data.visible_enemies || []) pts.push(e.position);
+  if (data.core) pts.push(data.core.position);
+  return pts;
+}
+
+function fogBrush(ctx, x, y, radius) {
+  const grad = ctx.createRadialGradient(x, y, 0, x, y, radius);
+  grad.addColorStop(0, "rgba(0,0,0,1)");
+  grad.addColorStop(0.7, "rgba(0,0,0,0.85)");
+  grad.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function buildFog() {
+  if (!base) return;
+  const m = mem();
+  const explored = m.explored || [];
+  const sources = fogSources();
+  const all = explored.slice();
+  for (const p of sources) all.push(p);
+  if (base) {
+    const rect = canvas.getBoundingClientRect();
+    const spanX = Math.ceil(rect.width / (base.cell * view.scale)) + 1;
+    const spanY = Math.ceil(rect.height / (base.cell * view.scale)) + 1;
+    all.push([base.minX, base.minY], [base.minX + spanX, base.minY + spanY]);
+  }
+  if (!all.length) {
+    fogGray = fogBlack = null;
+    fogBounds = null;
+    return;
+  }
+  const minX = Math.floor(Math.min(...all.map(p => p[0]))) - 2;
+  const maxX = Math.ceil(Math.max(...all.map(p => p[0]))) + 2;
+  const minY = Math.floor(Math.min(...all.map(p => p[1]))) - 2;
+  const maxY = Math.ceil(Math.max(...all.map(p => p[1]))) + 2;
+  let cell = Math.max(3, Math.min(10, Math.floor(base.cell * view.scale)));
+  let w = (maxX - minX + 1) * cell;
+  let h = (maxY - minY + 1) * cell;
+  if (w * h > 2000000) {
+    cell = Math.max(2, Math.floor(cell * Math.sqrt(2000000 / (w * h))));
+    w = (maxX - minX + 1) * cell;
+    h = (maxY - minY + 1) * cell;
+  }
+  const exploredSet = new Set(explored.map(p => p.join(",")));
+
+  fogGray = document.createElement("canvas");
+  fogGray.width = w;
+  fogGray.height = h;
+  const g = fogGray.getContext("2d");
+  g.fillStyle = "rgba(120, 132, 152, 0.52)";
+  g.fillRect(0, 0, w, h);
+  g.globalCompositeOperation = "destination-out";
+  for (const p of sources) {
+    fogBrush(g, (p[0] - minX) * cell + cell / 2, (p[1] - minY) * cell + cell / 2, FOG_GRAY_R * cell);
+  }
+  g.globalCompositeOperation = "source-over";
+
+  fogBlack = document.createElement("canvas");
+  fogBlack.width = w;
+  fogBlack.height = h;
+  const b = fogBlack.getContext("2d");
+  b.fillStyle = "#000000";
+  b.beginPath();
+  for (let x = minX; x <= maxX; x++) {
+    for (let y = minY; y <= maxY; y++) {
+      if (!exploredSet.has(`${x},${y}`)) {
+        b.rect((x - minX) * cell, (y - minY) * cell, cell + 0.5, cell + 0.5);
+      }
+    }
+  }
+  b.fill();
+  b.globalCompositeOperation = "destination-out";
+  for (const p of sources) {
+    fogBrush(b, (p[0] - minX) * cell + cell / 2, (p[1] - minY) * cell + cell / 2, FOG_BLACK_R * cell);
+  }
+  b.globalCompositeOperation = "source-over";
+  fogBounds = { minX, minY, maxX, maxY };
+}
 
 function threats() {
   const out = {};
@@ -809,6 +904,11 @@ function cellPx() { return base.cell * view.scale; }
 function drawMap() {
   if (!data || !base) { ctx.clearRect(0, 0, canvas.width, canvas.height); return; }
   const rect = canvas.getBoundingClientRect();
+  if (rect.width !== lastRectW || rect.height !== lastRectH) {
+    lastRectW = rect.width;
+    lastRectH = rect.height;
+    fogDirty = true;
+  }
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.max(1, Math.floor(rect.width * dpr));
   canvas.height = Math.max(1, Math.floor(rect.height * dpr));
@@ -818,11 +918,13 @@ function drawMap() {
 
   const m = mem();
   const cpx = cellPx();
+  if (fogDirty) {
+    buildFog();
+    fogDirty = false;
+  }
   const obstacleSet = new Set((m.obstacles || []).map(p => p.join(",")));
 
-  // 未探索区域罩一层“迷雾”，已探索地块用浅绿覆盖并描边
-  ctx.fillStyle = css("--fog");
-  ctx.fillRect(0, 0, rect.width, rect.height);
+  // 彩色底层：已探索地块浅绿打底 + 描边
   ctx.beginPath();
   for (const p of m.explored || []) {
     if (obstacleSet.has(p.join(","))) continue;
@@ -871,6 +973,15 @@ function drawMap() {
     ctx.shadowBlur = 0;
     ctx.strokeStyle = css("--bg2"); ctx.lineWidth = 1.5;
     ctx.stroke();
+  }
+
+  // 战争迷雾：灰色已探索层 + 纯黑未探索层（世界坐标缓存，随数据更新重建）
+  if (fogGray && fogBlack && fogBounds) {
+    const fb = fogBounds;
+    const fw = (fb.maxX - fb.minX + 1) * cpx;
+    const fh = (fb.maxY - fb.minY + 1) * cpx;
+    ctx.drawImage(fogGray, 0, 0, fogGray.width, fogGray.height, sx(fb.minX), sy(fb.minY), fw, fh);
+    ctx.drawImage(fogBlack, 0, 0, fogBlack.width, fogBlack.height, sx(fb.minX), sy(fb.minY), fw, fh);
   }
 
   ctx.strokeStyle = css("--threat");
@@ -1087,6 +1198,7 @@ window.addEventListener("mousemove", e => {
     view.x = dragging.vx + (e.clientX - dragging.x);
     view.y = dragging.vy + (e.clientY - dragging.y);
     viewTouched = true;
+    fogDirty = true;
     drawMap();
     return;
   }
@@ -1139,6 +1251,7 @@ canvas.addEventListener("wheel", e => {
   view.y = my - (my - view.y) * (ns / view.scale);
   view.scale = ns;
   viewTouched = true;
+  fogDirty = true;
   drawMap();
 }, { passive: false });
 canvas.addEventListener("dblclick", fit);
@@ -1190,6 +1303,7 @@ function renderProbe(d) {
 function fit() {
   view = { scale: 1, x: 0, y: 0 };
   viewTouched = false;
+  fogDirty = true;
   layout();
   drawMap();
 }
