@@ -49,7 +49,7 @@ services:
     # Bind all interfaces inside the container so the published port can
     # reach it; the host mapping below still exposes only loopback.
     ports:
-      - "127.0.0.1:8765:8765"
+      - "8765:8765"
 
 secrets:
   arena_hero_api_key:
