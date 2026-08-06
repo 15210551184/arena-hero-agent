@@ -163,8 +163,6 @@ def make_turn(
             "respawn_at_tick": None if core else tick + 10,
             "resources": resources,
             "population": len(units or []),
-            "population_tier": 0,
-            "upkeep_next_tick": 0,
             "champion_beacon": beacon,
             "objects": objects,
             "events": events or [],

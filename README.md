@@ -42,7 +42,7 @@ flowchart LR
 - A GNU/Linux server with systemd 235+ for the unattended server path; systemd
   247+ applies the complete unit hardening policy
 
-The tested contract is API `v0.1`, gameplay `v0.13`, and official Python SDK `0.2.8`. The bundled version monitor fails closed when it detects an incompatible contract.
+The tested contract is API `v0.1`, gameplay `v0.14`, and official Python SDK `0.2.9`. The bundled version monitor fails closed when it detects an incompatible contract.
 
 ## Quick Start
 

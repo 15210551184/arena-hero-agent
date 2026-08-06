@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 dependencies = [
-    "arena-hero==0.2.8",
+    "arena-hero @ https://github.com/arena-hero/arena-hero-python/archive/423d252adcca439669adb3e7b04252e53b4430bd.tar.gz",
     "httpx==0.28.1",
 ]
 classifiers = [
