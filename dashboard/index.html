@@ -19,7 +19,9 @@
   --ok: #059669;
   --warn: #d97706;
   --danger: #dc2626;
-  --explored: #e3efe8;
+  --explored: #d7eedd;
+  --explored-edge: #a9d4b8;
+  --fog: rgba(30, 50, 80, 0.07);
   --obstacle: #5b6675;
   --obstacle-edge: #7a8595;
   --unreachable: #d8dde6;
@@ -293,6 +295,24 @@ tbody tr:last-child td { border-bottom: none; }
   .side { min-height: 420px; }
   .map-toolbar .hint { display: none; }
 }
+@media (max-width: 768px) {
+  body { overflow: auto; }
+  .page { height: auto; padding: 0 10px 12px; }
+  .topbar { gap: 8px; padding: 8px 2px 10px; }
+  .brand .sub { display: none; }
+  .hud { gap: 5px; }
+  .hud-item { padding: 4px 8px; }
+  .ctl, .ctl-btn { min-height: 40px; padding: 6px 12px; font-size: 12px; }
+  .workspace { grid-template-columns: 1fr; gap: 10px; }
+  .map-col { min-height: 45vh; }
+  .side { min-height: auto; }
+  .map-toolbar .hint { display: none; }
+  .probe-panel { top: 8px; right: 8px; left: 8px; width: auto; max-width: none; }
+  .log-body .scroll { max-height: 180px; }
+  .panel h2 { font-size: 12px; }
+  table { font-size: 11px; }
+  .plan-list { max-height: 220px; }
+}
 </style>
 </head>
 <body>
@@ -334,6 +354,7 @@ tbody tr:last-child td { border-bottom: none; }
       <div class="tip" id="tip"></div>
       <div class="legend">
         <span><i style="background:var(--explored);border:1px solid var(--border)"></i>已探索</span>
+        <span><i style="background:var(--fog);border:1px dashed var(--border)"></i>未探索</span>
         <span><i style="background:var(--obstacle)"></i>障碍</span>
         <span><i class="circle" style="background:var(--resource)"></i>资源点</span>
         <span><i class="circle" style="background:var(--cargo)"></i>掉落货</span>
@@ -458,6 +479,58 @@ function threats() {
   return out;
 }
 
+const UNIT_ZH = { WORKER: "工人", VANGUARD: "先锋", RANGER: "游侠", CORE: "核心" };
+const ACTION_ZH = {
+  MOVE: "移动", HARVEST: "采集", DEPOSIT: "存入", SHOOT: "射击", SWEEP: "清扫",
+  SPAWN: "生产", HEAL: "修复", WAIT: "等待", NONE: "无", START_MOVE: "开始迁移",
+  CANCEL_MOVE: "取消移动", SELF_DESTRUCT: "自毁", PICKUP_BEACON: "拾取信标",
+  DROP_BEACON: "放下信标", REPAIR_SHIELD: "修复护盾",
+};
+const ZH_PHASE = {
+  EXPANSION: "扩张期", FORTIFY: "布防期", STOCKPILE: "囤积期", CLEAR_CORE: "清敌",
+  RECOVERY: "恢复中", RESPAWNING: "重生中", COMPATIBILITY_HOLD: "兼容冻结",
+};
+const ZH_THREAT = {
+  NORMAL: "正常", ALERT: "警戒", PRE_EVADE: "预撤离", ENGAGED: "交战中", BREAKOUT: "突围",
+};
+const ZH_MODE = {
+  HARVEST: "采集", SCOUT: "侦察", DEPOSIT: "存放", EVADE: "规避", EVADE_CARGO: "带货规避",
+  RESOURCE: "赶往资源", RESOURCE_BLOCKED: "资源受阻", SCOUT_BLOCKED: "侦察受阻",
+  SCOUT_COOLDOWN: "侦察冷却", SCOUT_EVADE: "侦察规避", SCOUT_RETURN: "侦察返航",
+  SCOUT_RETURN_BLOCKED: "返航受阻", WAIT_CORE: "等待核心", CORE_OBSERVER: "观察敌方核心",
+  CORE_OBSERVER_BLOCKED: "观察受阻", RECOVERY_EGRESS: "恢复撤离",
+  DELIVERY_CHAIN_CARGO: "运输链送货", DELIVERY_CHAIN_CLEAR: "运输链清障",
+  CLEAR_CORE_HANDOFF: "清敌交接", UNKNOWN: "未知",
+};
+const EVENT_ZH = {
+  HARVEST_SUCCEEDED: "采集成功", DEPOSIT_SUCCEEDED: "存入成功",
+  CORE_RESOURCES_CAPTURED: "核心资源被夺取", CORE_RESOURCE_OVERFLOW_DESTROYED: "资源溢出摧毁核心",
+  CORE_MOVE_STARTED: "核心开始迁移", CORE_MOVE_PROGRESS: "核心迁移中",
+  CORE_MOVE_SUCCEEDED: "核心迁移完成", CORE_MOVE_CANCELLED: "核心迁移取消",
+  CORE_SPAWN_SUCCEEDED: "生产成功", CORE_DAMAGED: "核心受损",
+  CORE_HEAL_SUCCEEDED: "核心修复成功", CORE_DESTROYED: "核心被摧毁",
+  CORE_RESPAWNED: "核心重生", UNIT_MOVE_SUCCEEDED: "单位移动成功",
+  UNIT_DAMAGED: "单位受损", UNIT_HEAL_SUCCEEDED: "单位修复成功",
+  UNIT_SHOOT_SUCCEEDED: "单位开火", UNIT_SWEEP_SUCCEEDED: "单位清扫",
+  UNIT_SPAWN_SUCCEEDED: "单位生产成功", UNIT_DESTROYED: "单位被摧毁",
+  WORKER_CARGO_DROPPED: "货物掉落", UPKEEP_PAID: "支付维护费",
+  UPKEEP_DEFICIT: "维护费不足", UPKEEP_DAMAGE: "维护费损失",
+};
+function zh(v, map) { return v == null ? v : (map[v] || v); }
+function evZh(type) {
+  if (EVENT_ZH[type]) return EVENT_ZH[type];
+  if (type.endsWith("_SUCCEEDED")) return type.replace(/_SUCCEEDED$/, "").replace(/_/g, " ") + " 成功";
+  if (type.endsWith("_FAILED")) return type.replace(/_FAILED$/, "").replace(/_/g, " ") + " 失败";
+  return type.replace(/_/g, " ");
+}
+function historyZh(text) {
+  return String(text || "")
+    .replace(/phase=(\w+)/g, (_, v) => "阶段=" + (ZH_PHASE[v] || v))
+    .replace(/threat=(\w+)/g, (_, v) => "威胁=" + (ZH_THREAT[v] || v))
+    .replace(/recovery=([01])/g, (_, v) => "恢复=" + (v === "1" ? "是" : "否"))
+    .replace(/compatibility_hold=([01])/g, (_, v) => "兼容冻结=" + (v === "1" ? "是" : "否"));
+}
+
 function renderAll() {
   renderHud();
   renderCore();
@@ -505,7 +578,7 @@ function renderCore() {
   }
   document.getElementById("core-pos").textContent = `(${c.position})`;
   const stateEl = document.getElementById("core-state");
-  stateEl.textContent = c.state === "MOVING" ? `迁移中 ${c.destination || ""}` : "NORMAL";
+  stateEl.textContent = c.state === "MOVING" ? `迁移中 ${c.destination || ""}` : "正常";
   stateEl.className = "core-state" + (c.state === "MOVING" ? " moving" : "");
   segs("core-hp-segs", c.hp, 5, false);
   segs("core-shield-segs", c.shield, 5, true);
@@ -525,12 +598,13 @@ function renderPlan() {
   } else {
     list.innerHTML = Object.entries(pa).map(([uid, a]) => {
       const u = units.get(uid);
-      const verb = ((a && a.type) || "WAIT").toLowerCase();
+      const raw = (a && a.type) || "WAIT";
+      const verb = raw.toLowerCase();
       const target = (a && (a.direction || a.unit_type)) || "";
       return `<div class="plan-item">
-        <span class="tag ${u ? "friend" : "neutral"}">${u ? u.unit_type : "?"}</span>
+        <span class="tag ${u ? "friend" : "neutral"}">${u ? zh(u.unit_type, UNIT_ZH) : "?"}</span>
         <span class="mono">${uid.slice(0, 6)}</span>
-        <span class="verb ${verb}">${(a && a.type) || "WAIT"}</span>
+        <span class="verb ${verb}">${zh(raw, ACTION_ZH)}</span>
         <span class="right"><span class="target mono">${target}</span>${etaFor(u, a)}</span>
       </div>`;
     }).join("");
@@ -540,7 +614,7 @@ function renderPlan() {
     const verb = (ca.type || "NONE").toLowerCase();
     const target = ca.direction || ca.unit_type || "";
     list.insertAdjacentHTML("beforeend",
-      `<div class="plan-item"><span class="tag core">CORE</span><span class="verb ${verb}">${ca.type || "NONE"}</span><span class="right"><span class="target mono">${target}</span><span class="eta now">本帧</span></span></div>`);
+      `<div class="plan-item"><span class="tag core">核心</span><span class="verb ${verb}">${zh(ca.type || "NONE", ACTION_ZH)}</span><span class="right"><span class="target mono">${target}</span><span class="eta now">本帧</span></span></div>`);
   }
 }
 
@@ -569,7 +643,7 @@ function tableRows(headers, rows) {
 
 function renderUnits() {
   const rows = data.units.map(u => `<tr>
-    <td><span class="tag friend">${u.unit_type}</span></td>
+    <td><span class="tag friend">${zh(u.unit_type, UNIT_ZH)}</span></td>
     <td>${u.id.slice(0, 8)}</td><td>(${u.position})</td><td>${u.hp}</td><td>${u.cargo || 0}</td>
     <td>${roleOf(u.id)}</td></tr>`).join("");
   document.getElementById("units-count").textContent = data.units.length;
@@ -579,12 +653,12 @@ function renderUnits() {
 
 function renderEnemies() {
   const visible = (data.visible_enemies || []).map(e => `<tr>
-    <td><span class="tag threat">${e.kind === "CORE" ? "CORE" : e.unit_type}</span></td>
+    <td><span class="tag threat">${e.kind === "CORE" ? "核心" : zh(e.unit_type, UNIT_ZH)}</span></td>
     <td>${e.id.slice(0, 8)}</td><td>(${e.position})</td><td>${e.hp}</td></tr>`).join("");
   const ghosts = Object.values(threats()).filter(t =>
     !(data.visible_enemies || []).some(e => e.id === t.enemy_id)
   ).map(t => `<tr>
-    <td><span class="tag threat">${t.kind === "CORE" ? "CORE" : t.unit_type || "?"}</span></td>
+    <td><span class="tag threat">${t.kind === "CORE" ? "核心" : zh(t.unit_type, UNIT_ZH) || "?"}</span></td>
     <td>${t.enemy_id.slice(0, 8)}</td><td>(${t.positions.at(-1)})</td><td>${t.hp}</td>
     <td>${t.stationary ? "静止" : "活跃"}</td><td>${data.tick - t.last_seen_tick}帧前</td></tr>`).join("");
   const count = data.visible_enemies.length + ghosts.length;
@@ -609,7 +683,7 @@ function renderHistory() {
   const rows = (data.history || []).map(h => {
     return `<div class="log-line">
       <span class="ltick">t${h.tick}</span>
-      <span class="lmsg">${h.text}</span>
+      <span class="lmsg">${historyZh(h.text)}</span>
     </div>`;
   }).join("");
   document.getElementById("history-count").textContent = (data.history || []).length;
@@ -630,7 +704,7 @@ function renderEvents() {
   document.getElementById("events-body").innerHTML = rows.map(e => {
     const parts = [
       `<span class="ltick">t${e.tick}</span>`,
-      `<span class="ev-type ${cls(e.type)}">${e.type}</span>`,
+      `<span class="ev-type ${cls(e.type)}">${evZh(e.type)}</span>`,
     ];
     if (e.reason) parts.push(`<span class="ev-reason">${e.reason}</span>`);
     if (e.actor || e.target) {
@@ -645,7 +719,8 @@ function renderEvents() {
 }
 
 function roleOf(uid) {
-  return (data.tactic.worker_modes || {})[uid] || "—";
+  const mode = (data.tactic.worker_modes || {})[uid];
+  return mode ? zh(mode, ZH_MODE) : "—";
 }
 
 function renderLogs() {
@@ -659,10 +734,10 @@ function renderLogs() {
   document.getElementById("log-count").textContent = list.length;
   const body = list.map(r => `<tr>
     <td>${r.tick}</td>
-    <td><span class="tag friend">${r.unit_type}</span> ${r.unit_id.slice(0, 6)}</td>
+    <td><span class="tag friend">${zh(r.unit_type, UNIT_ZH)}</span> ${r.unit_id.slice(0, 6)}</td>
     <td>(${r.pos})</td><td>${r.next ? "→ (" + r.next + ")" : "—"}</td>
-    <td>${r.action ? `<span class="tag neutral">${r.action}</span>` : "—"}</td>
-    <td>${r.hp}</td><td>${r.cargo || 0}</td><td>${r.role || "—"}</td>
+    <td>${r.action ? `<span class="tag neutral">${zh(r.action, ACTION_ZH)}</span>` : "—"}</td>
+    <td>${r.hp}</td><td>${r.cargo || 0}</td><td>${r.role ? zh(r.role, ZH_MODE) : "—"}</td>
   </tr>`).join("");
   document.getElementById("log-table").innerHTML =
     `<thead><tr><th>tick</th><th>单位</th><th>当前位置</th><th>下一步</th><th>动作</th><th>HP</th><th>货</th><th>职责</th></tr></thead>
@@ -727,11 +802,19 @@ function drawMap() {
   const cpx = cellPx();
   const obstacleSet = new Set((m.obstacles || []).map(p => p.join(",")));
 
-  ctx.fillStyle = css("--explored");
+  // 未探索区域罩一层“迷雾”，已探索地块用浅绿覆盖并描边
+  ctx.fillStyle = css("--fog");
+  ctx.fillRect(0, 0, rect.width, rect.height);
+  ctx.beginPath();
   for (const p of m.explored || []) {
     if (obstacleSet.has(p.join(","))) continue;
-    ctx.fillRect(sx(p[0]), sy(p[1]), cpx + 0.5, cpx + 0.5);
+    ctx.rect(sx(p[0]), sy(p[1]), cpx + 0.5, cpx + 0.5);
   }
+  ctx.fillStyle = css("--explored");
+  ctx.fill();
+  ctx.strokeStyle = css("--explored-edge");
+  ctx.lineWidth = 1;
+  ctx.stroke();
 
   if (cpx >= 6) {
     ctx.strokeStyle = css("--grid");
@@ -843,11 +926,11 @@ function drawMap() {
     if (hoverUnit.kind) {
       drawUnitLabel(
         hoverUnit.position,
-        `${hoverUnit.kind === "CORE" ? "CORE" : hoverUnit.unit_type} · ${hoverUnit.id.slice(0, 6)}`,
+        `${hoverUnit.kind === "CORE" ? "核心" : zh(hoverUnit.unit_type, UNIT_ZH)} · ${hoverUnit.id.slice(0, 6)}`,
         "threat",
       );
     } else {
-      drawUnitLabel(hoverUnit.position, `${hoverUnit.unit_type} · ${hoverUnit.id.slice(0, 6)}`);
+      drawUnitLabel(hoverUnit.position, `${zh(hoverUnit.unit_type, UNIT_ZH)} · ${hoverUnit.id.slice(0, 6)}`);
     }
   }
 
@@ -956,8 +1039,8 @@ window.addEventListener("mousemove", e => {
   if (!w) { tip.textContent = ""; return; }
   const here = [];
   if (data.core && data.core.position[0] === w.wx && data.core.position[1] === w.wy) here.push("Core");
-  for (const u of data.units || []) if (u.position[0] === w.wx && u.position[1] === w.wy) here.push("己方 " + u.unit_type);
-  for (const e2 of data.visible_enemies || []) if (e2.position[0] === w.wx && e2.position[1] === w.wy) here.push("敌方 " + (e2.unit_type || "CORE"));
+  for (const u of data.units || []) if (u.position[0] === w.wx && u.position[1] === w.wy) here.push("己方 " + zh(u.unit_type, UNIT_ZH));
+  for (const e2 of data.visible_enemies || []) if (e2.position[0] === w.wx && e2.position[1] === w.wy) here.push("敌方 " + (e2.kind === "CORE" ? "核心" : zh(e2.unit_type, UNIT_ZH)));
   for (const k in (mem().resources || {})) {
     const r = mem().resources[k];
     if (!r.confirmed_empty && r.position[0] === w.wx && r.position[1] === w.wy) here.push(r.source === "CARGO" ? "掉落货" : "资源点");
