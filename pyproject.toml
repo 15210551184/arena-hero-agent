@@ -49,3 +49,6 @@ py-modules = [
 
 [tool.setuptools.packages.find]
 include = ["dashboard*"]
+
+[tool.setuptools.package-data]
+dashboard = ["index.html"]
