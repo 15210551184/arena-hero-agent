@@ -29,6 +29,7 @@ dist/
 *.log.*
 reports/
 state/
+data/
 snapshot.json
 state.json
 

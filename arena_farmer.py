@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import heapq
+import json
 import math
 import os
 import socket
@@ -167,9 +168,11 @@ DEFAULT_DASHBOARD_PORT = 8765
 DEFAULT_DASHBOARD_HOST = "127.0.0.1"
 DEFAULT_SNAPSHOT_FILE = Path("snapshot.json")
 SNAPSHOT_SCHEMA_VERSION = 1
+DASHBOARD_MEMORY_SCHEMA_VERSION = 1
 DASHBOARD_MAX_TRAJECTORY = 40
 DASHBOARD_MAX_ROWS = 200
 DASHBOARD_MAX_EXPLORED = 5000
+DEFAULT_DASHBOARD_MEMORY_FILE = Path("dashboard-memory.json")
 
 
 class LifecycleMode(str, Enum):
@@ -430,6 +433,70 @@ class DashboardMemory:
             "enemy_sightings": _enemy_sightings_view(tactic),
             "threat_ghosts": _threat_ghosts_view(tactic),
         }
+
+    def save(self, path: Path) -> None:
+        atomic_write_json(
+            path,
+            {
+                "schema_version": DASHBOARD_MEMORY_SCHEMA_VERSION,
+                "trajectories": {
+                    str(unit_id): [list(position) for position in trail]
+                    for unit_id, trail in self.trajectories.items()
+                },
+                "explored": {
+                    f"{position[0]},{position[1]}": tick
+                    for position, tick in self.explored.items()
+                },
+                "resources_first_seen": {
+                    f"{position[0]},{position[1]}": tick
+                    for position, tick in self.resources_first_seen.items()
+                },
+                "resources_last_seen": {
+                    f"{position[0]},{position[1]}": tick
+                    for position, tick in self.resources_last_seen.items()
+                },
+                "last_phase": self.last_phase,
+                "last_threat_level": self.last_threat_level,
+                "last_recovery": self.last_recovery,
+                "last_compatibility_hold": self.last_compatibility_hold,
+            },
+        )
+
+    @classmethod
+    def load(cls, path: Path | None) -> DashboardMemory:
+        memory = cls()
+        if path is None:
+            return memory
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return memory
+        if not isinstance(payload, dict):
+            return memory
+        try:
+            for unit_id, trail in payload.get("trajectories", {}).items():
+                memory.trajectories[UUID(unit_id)] = deque(
+                    (tuple(position) for position in trail),
+                    maxlen=memory.max_trajectory,
+                )
+            for key, tick in payload.get("explored", {}).items():
+                memory.explored[_position_from_key(key)] = int(tick)
+            for key, tick in payload.get("resources_first_seen", {}).items():
+                memory.resources_first_seen[_position_from_key(key)] = int(tick)
+            for key, tick in payload.get("resources_last_seen", {}).items():
+                memory.resources_last_seen[_position_from_key(key)] = int(tick)
+            memory.last_phase = payload.get("last_phase")
+            memory.last_threat_level = payload.get("last_threat_level")
+            memory.last_recovery = payload.get("last_recovery")
+            memory.last_compatibility_hold = payload.get("last_compatibility_hold")
+        except (KeyError, ValueError, TypeError):
+            return cls()
+        return memory
+
+
+def _position_from_key(key: str) -> Position:
+    x, y = key.split(",", 1)
+    return int(x), int(y)
 
 
 def _enemy_sightings_view(tactic: CoreFarmer) -> list[dict[str, object]]:
@@ -4991,6 +5058,7 @@ def play(
     heartbeat_file: Path | None = None,
     stale_turn_timeout_seconds: float = DEFAULT_STALE_TURN_TIMEOUT_SECONDS,
     snapshot_file: Path = DEFAULT_SNAPSHOT_FILE,
+    dashboard_memory_file: Path = DEFAULT_DASHBOARD_MEMORY_FILE,
     dashboard_port: int = DEFAULT_DASHBOARD_PORT,
     dashboard_host: str = DEFAULT_DASHBOARD_HOST,
     dashboard_enabled: bool = True,
@@ -5007,7 +5075,7 @@ def play(
     )
     last_accepted_tick: int | None = None
     resource_ledger_snapshot: ResourceLedgerSnapshot | None = None
-    memory = DashboardMemory()
+    memory = DashboardMemory.load(dashboard_memory_file)
     activity = {"monotonic": time.monotonic()}
     if dashboard_enabled:
         try:
@@ -5072,6 +5140,13 @@ def play(
                 except OSError as exc:
                     print(
                         f"WARNING dashboard snapshot write failed: {exc}",
+                        file=sys.stderr,
+                    )
+                try:
+                    memory.save(dashboard_memory_file)
+                except OSError as exc:
+                    print(
+                        f"WARNING dashboard memory save failed: {exc}",
                         file=sys.stderr,
                     )
                 resource_ledger_snapshot = _resource_ledger_snapshot(turn)
@@ -5153,6 +5228,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Atomically write a dashboard snapshot JSON after every accepted Turn.",
     )
     parser.add_argument(
+        "--dashboard-memory-file",
+        type=Path,
+        default=DEFAULT_DASHBOARD_MEMORY_FILE,
+        help="Persist dashboard memory (trajectories, explored cells, resource memory) across restarts.",
+    )
+    parser.add_argument(
         "--dashboard-port",
         type=int,
         default=DEFAULT_DASHBOARD_PORT,
@@ -5188,6 +5269,7 @@ def main(argv: list[str] | None = None) -> int:
             heartbeat_file=args.heartbeat_file,
             stale_turn_timeout_seconds=args.stale_turn_timeout_seconds,
             snapshot_file=args.snapshot_file,
+            dashboard_memory_file=args.dashboard_memory_file,
             dashboard_port=args.dashboard_port,
             dashboard_host=args.dashboard_host,
             dashboard_enabled=not args.no_dashboard,

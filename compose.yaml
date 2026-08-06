@@ -14,6 +14,8 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    volumes:
+      - ./data:/data
     environment:
       ARENA_HERO_API_KEY_FILE: /run/secrets/arena_hero_api_key
     healthcheck:
@@ -44,6 +46,8 @@ services:
       - "150"
       - --snapshot-file
       - /tmp/arena-hero-snapshot.json
+      - --dashboard-memory-file
+      - /data/dashboard-memory.json
       - --dashboard-host
       - "0.0.0.0"
     # Bind all interfaces inside the container so the published port can

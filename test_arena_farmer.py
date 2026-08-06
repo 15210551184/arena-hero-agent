@@ -326,6 +326,38 @@ class DashboardSnapshotTests(unittest.TestCase):
         self.assertEqual(loaded["tick"], 1)
         self.assertIn("generated_at", loaded)
 
+    def test_memory_save_load_round_trip(self) -> None:
+        tactic = CoreFarmer()
+        memory = DashboardMemory()
+        for tick, position in ((1, (0, 0)), (2, (1, 0)), (3, (2, 0))):
+            turn = make_turn(
+                tick=tick,
+                units=[unit(WORKER_1, "WORKER", position)],
+                resource_cells=[(5, 5)] if tick == 2 else None,
+            )
+            tactic.choose_actions(turn)
+            memory.update(turn, tactic)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "dashboard-memory.json"
+            memory.save(path)
+            restored = DashboardMemory.load(path)
+        self.assertEqual(
+            [list(p) for p in restored.trajectories[UUID(WORKER_1)]],
+            [[0, 0], [1, 0], [2, 0]],
+        )
+        self.assertIn((2, 0), restored.explored)
+        self.assertEqual(restored.resources_last_seen[(5, 5)], 2)
+        self.assertEqual(restored.last_phase, memory.last_phase)
+        self.assertEqual(restored.last_threat_level, memory.last_threat_level)
+
+    def test_memory_load_ignores_missing_or_corrupt_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing.json"
+            self.assertEqual(len(DashboardMemory.load(missing).trajectories), 0)
+            corrupt = Path(directory) / "corrupt.json"
+            corrupt.write_text("{not json", encoding="utf-8")
+            self.assertEqual(len(DashboardMemory.load(corrupt).trajectories), 0)
+
 
 class CoreFarmerTests(unittest.TestCase):
     @staticmethod
@@ -4085,12 +4117,15 @@ class EventLoopTests(unittest.TestCase):
                 "0.0.0.0",
                 "--snapshot-file",
                 "/tmp/arena-hero-snapshot.json",
+                "--dashboard-memory-file",
+                "/tmp/arena-hero-memory.json",
             ]
         )
         self.assertTrue(args.no_dashboard)
         self.assertEqual(args.dashboard_port, 9000)
         self.assertEqual(args.dashboard_host, "0.0.0.0")
         self.assertEqual(args.snapshot_file, Path("/tmp/arena-hero-snapshot.json"))
+        self.assertEqual(args.dashboard_memory_file, Path("/tmp/arena-hero-memory.json"))
 
     def test_dashboard_defaults(self) -> None:
         args = build_parser().parse_args([])
@@ -4098,6 +4133,7 @@ class EventLoopTests(unittest.TestCase):
         self.assertEqual(args.dashboard_port, 8765)
         self.assertEqual(args.dashboard_host, "127.0.0.1")
         self.assertEqual(args.snapshot_file, Path("snapshot.json"))
+        self.assertEqual(args.dashboard_memory_file, Path("dashboard-memory.json"))
 
     def test_play_writes_dashboard_snapshot(self) -> None:
         events: list[Turn] = [
@@ -4123,6 +4159,7 @@ class EventLoopTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             snapshot_file = Path(directory) / "snapshot.json"
+            memory_file = Path(directory) / "dashboard-memory.json"
             with patch("arena_farmer.ArenaHeroClient", FakeGame):
                 with self.assertRaises(OSError):
                     play(
@@ -4131,13 +4168,17 @@ class EventLoopTests(unittest.TestCase):
                         worker_target=12,
                         beacon_policy="retreat",
                         snapshot_file=snapshot_file,
+                        dashboard_memory_file=memory_file,
                         dashboard_enabled=False,
                         stale_turn_timeout_seconds=0.05,
                     )
             loaded = json.loads(snapshot_file.read_text(encoding="utf-8"))
+            memory_payload = json.loads(memory_file.read_text(encoding="utf-8"))
         self.assertEqual(loaded["tick"], 3)
         self.assertEqual(len(loaded["units"]), 1)
         self.assertIn("memory", loaded)
+        self.assertIn("trajectories", memory_payload)
+        self.assertEqual(memory_payload["schema_version"], 1)
 
     def test_stale_turn_watchdog_closes_stream_for_supervisor_restart(self) -> None:
         instances: list[FakeGame] = []

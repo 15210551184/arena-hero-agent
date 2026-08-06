@@ -20,6 +20,7 @@ The main Agent requires only an Arena Hero API key. Configuration precedence is:
 | `--heartbeat-file` | none | Write liveness metadata after each accepted Turn. |
 | `--stale-turn-timeout-seconds` | `0` | Exit with a transient failure after no accepted Turn; `0` disables. |
 | `--snapshot-file` | `./snapshot.json` | Atomically write dashboard snapshot JSON per accepted Turn. |
+| `--dashboard-memory-file` | `./dashboard-memory.json` | Persist dashboard memory (trajectories, explored cells, resources) across restarts. |
 | `--dashboard-port` | `8765` | Embedded dashboard port. |
 | `--dashboard-host` | `127.0.0.1` | Embedded dashboard bind address. |
 | `--no-dashboard` | off | Disable the embedded dashboard server. |
