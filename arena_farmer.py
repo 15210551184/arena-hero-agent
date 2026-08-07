@@ -173,6 +173,8 @@ DASHBOARD_MEMORY_SCHEMA_VERSION = 1
 DASHBOARD_MAX_TRAJECTORY = 40
 DASHBOARD_MAX_ROWS = 8000
 DASHBOARD_MAX_EXPLORED = 5000
+DASHBOARD_SEND_ROWS = 1000
+MAX_KNOWN_OBSTACLES = 16_000
 DEFAULT_DASHBOARD_MEMORY_FILE = Path("dashboard-memory.json")
 
 
@@ -645,7 +647,6 @@ def build_snapshot(
         "units": _units_view(turn),
         "visible_enemies": _enemies_view(turn),
         "visible_resources": [list(p) for p in sorted(turn.resource_cells)],
-        "known_obstacles": [list(p) for p in sorted(tactic.known_obstacles)],
         "plan": turn.plan.model_dump(mode="json", exclude_none=True),
         "tactic": {
             "strategy_phase": tactic.strategy_phase(turn),
@@ -668,9 +669,9 @@ def build_snapshot(
             },
         },
         "memory": memory.view(tactic),
-        "tick_log": list(memory.tick_log),
-        "event_log": list(memory.event_log),
-        "history": list(memory.history),
+        "tick_log": list(memory.tick_log)[-DASHBOARD_SEND_ROWS:],
+        "event_log": list(memory.event_log)[-DASHBOARD_SEND_ROWS:],
+        "history": list(memory.history)[-DASHBOARD_SEND_ROWS:],
     }
 
 
@@ -1901,6 +1902,19 @@ class CoreFarmer:
 
     def _stockpile_hit(self, turn: Turn) -> bool:
         return self.resource_target > 0 and turn.resources >= self.resource_target
+
+    def _prune_known_obstacles(self, core_position: Position) -> None:
+        if len(self.known_obstacles) <= MAX_KNOWN_OBSTACLES:
+            return
+        ordered = sorted(
+            self.known_obstacles,
+            key=lambda position: (
+                _distance(position, core_position),
+                position[0],
+                position[1],
+            ),
+        )
+        self.known_obstacles = set(ordered[:MAX_KNOWN_OBSTACLES])
 
     def _refresh_compatibility_hold(self) -> None:
         if self.compatibility_marker is None:
@@ -3325,6 +3339,7 @@ class CoreFarmer:
         self._update_enemy_awareness(turn)
         self._refresh_compatibility_hold()
         self.known_obstacles.update(turn.obstacle_cells)
+        self._prune_known_obstacles(core.position)
         self._refresh_threat_assessment(turn)
         self.stationary_unit_target_id = None
         active_raid_target = self._active_raid_target_for_recall()
@@ -3470,11 +3485,15 @@ class CoreFarmer:
             tick=turn.tick,
             blocked=resource_route_blocked,
         )
-        resource_assignments = self._assign_resource_targets(
-            economic_empty_workers,
-            tick=turn.tick,
-            blocked=resource_route_blocked,
-        )
+        if self._stockpile_hit(turn):
+            self.resource_intents = {}
+            resource_assignments = {}
+        else:
+            resource_assignments = self._assign_resource_targets(
+                economic_empty_workers,
+                tick=turn.tick,
+                blocked=resource_route_blocked,
+            )
         current_resources = set(turn.resource_cells)
         departing_core_workers = [
             worker for worker in empty_workers if worker.position == core.position
@@ -3554,6 +3573,9 @@ class CoreFarmer:
                 elif core.view.state is not CoreState.NORMAL:
                     worker.wait()
                     self._set_worker_mode(worker, "WAIT_CORE", core.position)
+                elif self._stockpile_hit(turn):
+                    worker.wait()
+                    self._set_worker_mode(worker, "STOCKPILE_HOLD", core.position)
                 else:
                     moved = _queue_move(
                         worker,

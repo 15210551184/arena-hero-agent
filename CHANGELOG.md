@@ -23,6 +23,14 @@ All notable changes to this project will be documented in this file. The format 
   spawning through `unit_cost()`, plus an optional `--resource-target N`
   stockpile mode that banks resources and stops discretionary production and
   shield repair once the target is reached.
+- Stockpile mode parks cargo Workers on a full Core (`STOCKPILE_HOLD`) instead
+  of the pointless RETURN/CLEAR_CORE shuffle, and skips new harvest routing
+  while the bank is full.
+- Dashboard responsiveness fixes: `known_obstacles` memory is bounded to 16k
+  cells (pruned nearest the Core), live snapshot streams are trimmed to 1000
+  rows each, static map layers (explored/obstacles/resources) are cached to
+  offscreen canvases, and the system-dynamics panel renders only the latest
+  200 entries.
 - Hierarchical lifecycle and threat assessment with explicit posture/reason diagnostics for alerts, pre-evasion, engagement, multi-axis breakout, recovery, and compatibility hold.
 
 ### Changed

@@ -457,6 +457,7 @@ async function poll() {
       document.getElementById("updated").textContent = lastNewLabel;
       layout();
       fogDirty = true;
+      staticDirty = true;
       renderAll();
       drawMap();
     }
@@ -490,7 +491,11 @@ const FOG_GRAY_R = 4.5;
 let fogGray = null;
 let fogBlack = null;
 let fogBounds = null;
+let fogCell = 4;
 let fogDirty = true;
+let staticBase = null;
+let staticMap = null;
+let staticDirty = true;
 let lastRectW = 0;
 let lastRectH = 0;
 
@@ -528,6 +533,7 @@ function buildFog() {
   }
   if (!all.length) {
     fogGray = fogBlack = null;
+    staticBase = staticMap = null;
     fogBounds = null;
     return;
   }
@@ -543,6 +549,7 @@ function buildFog() {
     w = (maxX - minX + 1) * cell;
     h = (maxY - minY + 1) * cell;
   }
+  fogCell = cell;
   const exploredSet = new Set(explored.map(p => p.join(",")));
 
   fogGray = document.createElement("canvas");
@@ -602,6 +609,80 @@ function buildFog() {
   fogBounds = { minX, minY, maxX, maxY };
 }
 
+function roundRectPath(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
+}
+
+function buildStatic() {
+  staticBase = staticMap = null;
+  if (!base || !fogBounds) return;
+  const fb = fogBounds;
+  const cell = fogCell;
+  const m = mem();
+  const w = (fb.maxX - fb.minX + 1) * cell;
+  const h = (fb.maxY - fb.minY + 1) * cell;
+  const px = p => [(p[0] - fb.minX) * cell, (p[1] - fb.minY) * cell];
+  const obstacleSet = new Set((m.obstacles || []).map(p => p.join(",")));
+
+  staticBase = document.createElement("canvas");
+  staticBase.width = w;
+  staticBase.height = h;
+  const bg = staticBase.getContext("2d");
+  bg.beginPath();
+  for (const p of m.explored || []) {
+    if (obstacleSet.has(p.join(","))) continue;
+    const [x, y] = px(p);
+    bg.rect(x, y, cell + 0.5, cell + 0.5);
+  }
+  bg.fillStyle = css("--explored");
+  bg.fill();
+  bg.strokeStyle = css("--explored-edge");
+  bg.lineWidth = 1;
+  bg.stroke();
+
+  staticMap = document.createElement("canvas");
+  staticMap.width = w;
+  staticMap.height = h;
+  const mc = staticMap.getContext("2d");
+  mc.save();
+  mc.shadowColor = "rgba(60, 75, 100, 0.30)";
+  mc.shadowBlur = Math.max(2, cell * 0.14);
+  mc.shadowOffsetY = Math.max(1, cell * 0.10);
+  mc.fillStyle = css("--obstacle");
+  for (const p of m.obstacles || []) {
+    const [ox, oy] = px(p);
+    roundRectPath(mc, ox + 0.5, oy + 0.5, cell - 1, cell - 1, Math.min(4, cell * 0.18));
+    mc.fill();
+  }
+  mc.restore();
+  mc.strokeStyle = css("--obstacle-edge");
+  mc.lineWidth = 1;
+  for (const p of m.obstacles || []) {
+    const [ox, oy] = px(p);
+    roundRectPath(mc, ox + 0.5, oy + 0.5, cell - 1, cell - 1, Math.min(4, cell * 0.18));
+    mc.stroke();
+  }
+  for (const k in (m.resources || {})) {
+    const r = m.resources[k];
+    if (r.confirmed_empty) continue;
+    const [cx, cy] = px(r.position);
+    const rr = Math.max(3, cell * 0.3);
+    mc.fillStyle = r.source === "CARGO" ? css("--cargo") : css("--resource");
+    mc.shadowColor = r.source === "CARGO" ? css("--cargo") : css("--resource");
+    mc.shadowBlur = 6;
+    mc.beginPath(); mc.arc(cx + cell / 2, cy + cell / 2, rr, 0, Math.PI * 2); mc.fill();
+    mc.shadowBlur = 0;
+    mc.strokeStyle = css("--bg2"); mc.lineWidth = 1.5;
+    mc.stroke();
+  }
+}
+
 function threats() {
   const out = {};
   for (const s of (mem().enemy_sightings || [])) {
@@ -638,7 +719,7 @@ const ZH_MODE = {
   SCOUT_RETURN_BLOCKED: "返航受阻", WAIT_CORE: "等待核心", CORE_OBSERVER: "观察敌方核心",
   CORE_OBSERVER_BLOCKED: "观察受阻", RECOVERY_EGRESS: "恢复撤离",
   DELIVERY_CHAIN_CARGO: "运输链送货", DELIVERY_CHAIN_CLEAR: "运输链清障",
-  CLEAR_CORE_HANDOFF: "清敌交接", UNKNOWN: "未知",
+  CLEAR_CORE_HANDOFF: "清敌交接", STOCKPILE_HOLD: "囤积待命", UNKNOWN: "未知",
 };
 const EVENT_ZH = {
   HARVEST_SUCCEEDED: "采集成功", DEPOSIT_SUCCEEDED: "存入成功",
@@ -849,7 +930,7 @@ function renderResources() {
 }
 
 function renderHistory() {
-  const rows = (data.history || []).map(h => {
+  const rows = (data.history || []).slice(-200).map(h => {
     return `<div class="log-line">
       <span class="ltick">t${h.tick}</span>
       <span class="lmsg">${historyZh(h.text)}</span>
@@ -976,21 +1057,20 @@ function drawMap() {
   const cpx = cellPx();
   if (fogDirty) {
     buildFog();
+    if (staticDirty) {
+      buildStatic();
+      staticDirty = false;
+    }
     fogDirty = false;
   }
-  const obstacleSet = new Set((m.obstacles || []).map(p => p.join(",")));
 
-  // 彩色底层：已探索地块浅绿打底 + 描边
-  ctx.beginPath();
-  for (const p of m.explored || []) {
-    if (obstacleSet.has(p.join(","))) continue;
-    ctx.rect(sx(p[0]), sy(p[1]), cpx + 0.5, cpx + 0.5);
+  // 彩色底层：已探索地块浅绿打底 + 描边（离屏缓存，数据变化时才重建）
+  if (staticBase && fogBounds) {
+    const fb = fogBounds;
+    const fw = (fb.maxX - fb.minX + 1) * cpx;
+    const fh = (fb.maxY - fb.minY + 1) * cpx;
+    ctx.drawImage(staticBase, 0, 0, staticBase.width, staticBase.height, sx(fb.minX), sy(fb.minY), fw, fh);
   }
-  ctx.fillStyle = css("--explored");
-  ctx.fill();
-  ctx.strokeStyle = css("--explored-edge");
-  ctx.lineWidth = 1;
-  ctx.stroke();
 
   if (cpx >= 6) {
     const gx0 = Math.floor(base.minX), gy0 = Math.floor(base.minY);
@@ -1021,39 +1101,12 @@ function drawMap() {
     }
   }
 
-  ctx.save();
-  ctx.shadowColor = "rgba(60, 75, 100, 0.30)";
-  ctx.shadowBlur = Math.max(2, cpx * 0.14);
-  ctx.shadowOffsetY = Math.max(1, cpx * 0.10);
-  ctx.fillStyle = css("--obstacle");
-  for (const p of m.obstacles || []) {
-    const ox = sx(p[0]) + 0.5, oy = sy(p[1]) + 0.5, os = cpx - 1;
-    rr(ox, oy, os, os, Math.min(4, cpx * 0.18));
-    ctx.fill();
-  }
-  ctx.restore();
-  ctx.strokeStyle = css("--obstacle-edge");
-  ctx.lineWidth = 1;
-  for (const p of m.obstacles || []) {
-    const ox = sx(p[0]) + 0.5, oy = sy(p[1]) + 0.5, os = cpx - 1;
-    rr(ox, oy, os, os, Math.min(4, cpx * 0.18));
-    ctx.strokeStyle = css("--obstacle-edge");
-    ctx.stroke();
-  }
-
-  for (const k in (m.resources || {})) {
-    const r = m.resources[k];
-    if (r.confirmed_empty) continue;
-    const p = r.position;
-    const cx = sx(p[0]) + cpx / 2, cy = sy(p[1]) + cpx / 2;
-    const rr = Math.max(3, cpx * 0.3);
-    ctx.fillStyle = r.source === "CARGO" ? css("--cargo") : css("--resource");
-    ctx.shadowColor = r.source === "CARGO" ? css("--cargo") : css("--resource");
-    ctx.shadowBlur = 6;
-    ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.strokeStyle = css("--bg2"); ctx.lineWidth = 1.5;
-    ctx.stroke();
+  // 障碍物 + 资源点：离屏缓存（数据变化时才重建），放在网格之上、迷雾之下
+  if (staticMap && fogBounds) {
+    const fb = fogBounds;
+    const fw = (fb.maxX - fb.minX + 1) * cpx;
+    const fh = (fb.maxY - fb.minY + 1) * cpx;
+    ctx.drawImage(staticMap, 0, 0, staticMap.width, staticMap.height, sx(fb.minX), sy(fb.minY), fw, fh);
   }
 
   // 战争迷雾：灰色已探索层 + 纯黑未探索层（世界坐标缓存，随数据更新重建）

@@ -21,6 +21,7 @@ from arena_farmer import (
     GlobalPosture,
     LifecycleMode,
     MAX_FLEET_UNITS,
+    MAX_KNOWN_OBSTACLES,
     MAX_WORKER_TARGET,
     ResourceLedgerSnapshot,
     ThreatLevel,
@@ -286,7 +287,10 @@ class DashboardSnapshotTests(unittest.TestCase):
         self.assertIsNotNone(snapshot["core"])
         self.assertEqual(len(snapshot["visible_enemies"]), 1)
         self.assertIn([2, 2], snapshot["visible_resources"])
-        self.assertIn([3, 3], snapshot["known_obstacles"])
+        self.assertIn([3, 3], snapshot["memory"]["obstacles"])
+        self.assertLessEqual(len(snapshot["tick_log"]), 1000)
+        self.assertLessEqual(len(snapshot["event_log"]), 1000)
+        self.assertLessEqual(len(snapshot["history"]), 1000)
         self.assertIn("unit_actions", snapshot["plan"])
         self.assertEqual(snapshot["tactic"]["worker_target"], 12)
         self.assertEqual(snapshot["tactic"]["resource_target"], 0)
@@ -3284,6 +3288,35 @@ class CoreFarmerTests(unittest.TestCase):
         ).choose_actions(below_target)
         queued = below_target.plan.model_dump(mode="json", exclude_none=True)
         self.assertEqual(queued["core_action"]["type"], "REPAIR_SHIELD")
+
+    def test_stockpile_hold_parks_cargo_worker_on_full_core(self) -> None:
+        turn = make_turn(
+            resources=10,
+            units=[unit(WORKER_1, "WORKER", (0, 0), cargo=1)],
+        )
+        tactic = CoreFarmer(
+            worker_target=1,
+            resource_target=5,
+            beacon_policy="hold",
+        )
+        tactic.choose_actions(turn)
+        queued = turn.plan.model_dump(mode="json", exclude_none=True)
+
+        self.assertEqual(tactic.worker_modes[UUID(WORKER_1)], "STOCKPILE_HOLD")
+        self.assertEqual(queued["unit_actions"][WORKER_1]["type"], "WAIT")
+
+    def test_known_obstacles_are_bounded_near_core(self) -> None:
+        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        for index in range(MAX_KNOWN_OBSTACLES + 500):
+            tactic.known_obstacles.add((400 + index, 0))
+        tactic.known_obstacles.add((2, 0))
+        tactic.known_obstacles.add((3, 0))
+
+        tactic._prune_known_obstacles((0, 0))
+
+        self.assertLessEqual(len(tactic.known_obstacles), MAX_KNOWN_OBSTACLES)
+        self.assertIn((2, 0), tactic.known_obstacles)
+        self.assertIn((3, 0), tactic.known_obstacles)
 
     def test_four_workers_accumulate_before_expanding_to_six(self) -> None:
         workers = [
