@@ -109,7 +109,6 @@ CORE_BULK_CARGO_ETA = 4
 CORE_BULK_CARGO = 3
 CORE_CONGESTED_CARGO = 3
 CORE_DELIVERY_CHAIN_MAX = 8
-DEPOSIT_QUEUE_RADIUS = 3
 CORE_EVADE_TRIGGER_DISTANCE = 12
 CORE_EVADE_RELEASE_DISTANCE = CORE_EVADE_TRIGGER_DISTANCE + 2
 CORE_MOVE_COMMIT_PROGRESS = 2
@@ -1149,17 +1148,19 @@ def _deposit_staging_target(
     core_position: Position,
     context: MovementContext,
 ) -> Position | None:
-    """Pick a nearby, unoccupied staging cell for a queued cargo Worker."""
+    """Pick an adjacent staging cell so the next deposit can swap in instantly."""
     candidates: list[tuple[object, ...]] = []
-    for dx in range(-DEPOSIT_QUEUE_RADIUS, DEPOSIT_QUEUE_RADIUS + 1):
-        for dy in range(-DEPOSIT_QUEUE_RADIUS, DEPOSIT_QUEUE_RADIUS + 1):
+    for dx in range(-2, 3):
+        for dy in range(-2, 3):
             distance = abs(dx) + abs(dy)
-            if distance < 2 or distance > DEPOSIT_QUEUE_RADIUS:
+            if distance < 1 or distance > 2:
                 continue
             destination = (
                 core_position[0] + dx,
                 core_position[1] + dy,
             )
+            if distance == 1 and destination == context.delivery_lane:
+                continue
             if not _is_signed_int64_position(destination):
                 continue
             if destination in context.obstacles:
@@ -1175,6 +1176,7 @@ def _deposit_staging_target(
                 continue
             candidates.append(
                 (
+                    distance,
                     context.friendly_counts[destination],
                     _distance(unit.position, destination),
                     getattr(unit.id, "int", 0) % 1000,
@@ -1183,7 +1185,7 @@ def _deposit_staging_target(
             )
     if not candidates:
         return None
-    return min(candidates)[3]
+    return min(candidates)[4]
 
 
 def _rotate_directions(
@@ -3865,10 +3867,7 @@ class CoreFarmer:
                     )
                 continue
             if worker.id != active_depositor_id:
-                if (
-                    _distance(worker.position, core.position)
-                    > DEPOSIT_QUEUE_RADIUS
-                ):
+                if _distance(worker.position, core.position) > 1:
                     staging = _deposit_staging_target(
                         worker,
                         core.position,

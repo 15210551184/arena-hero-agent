@@ -39,6 +39,10 @@ All notable changes to this project will be documented in this file. The format 
 - Queued cargo Workers now stage near the Core (move until within 2-3 cells and
   wait there) instead of freezing at their current position, so deposits
   pipeline smoothly once the Core cell frees.
+- Pipelined Core deposits: queued cargo Workers advance to the adjacent ring
+  while the current depositor is on the Core, and the next Worker enters the
+  Core cell in the same Tick the depositor moves out (legal same-Tick swap), so
+  the Core cell is never left idle between deposits.
 - Dashboard Units, Enemies, and Resources panels now scroll independently
   (max-height 220px) instead of stretching the whole sidebar.
 - New `--raid-policy stockpile` offense mode linked to `--resource-target`:
