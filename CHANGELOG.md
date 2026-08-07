@@ -61,6 +61,10 @@ All notable changes to this project will be documented in this file. The format 
 - `--home-squads N` (default 1) keeps N hunt groups at home guarding the Core;
   only the remaining groups patrol and strike, so raids and hunts never strip
   the home defense.
+- Simplified the dashboard "运行设置" panel: Worker target and hunt group count
+  are now auto-derived from the fleet cap (Worker target fills the remaining
+  space, group count auto-scales), leaving four manual controls: fleet cap,
+  home groups, stockpile target, and raid policy.
 - Dashboard Units, Enemies, and Resources panels now scroll independently
   (max-height 220px) instead of stretching the whole sidebar.
 - New `--raid-policy stockpile` offense mode linked to `--resource-target`:
