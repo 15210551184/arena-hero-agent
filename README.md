@@ -240,7 +240,8 @@ stockpiling until the target is reached again.
 spare Vanguards/Rangers patrol a wider ring around the Core and attack visible
 enemy Cores (first) and enemy Workers/Vanguards/Rangers on sight, without
 requiring the stationary/unprotected confirmation. The Core guard unit stays
-home and strikes recall under combat pressure. `off` keeps the conservative
+home, hunt groups patrol in tight formations (so units are not picked off one
+by one), and strikes recall under combat pressure. `off` keeps the conservative
 confirmed-stationary raid behavior. In Docker Compose set
 `ARENA_RAID_POLICY=stockpile` or `ARENA_RAID_POLICY=hunt`; the systemd path
 reads it from

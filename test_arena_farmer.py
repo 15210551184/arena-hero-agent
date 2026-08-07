@@ -6,7 +6,7 @@ import json
 import tempfile
 import threading
 import unittest
-from collections import deque
+from collections import Counter, deque
 from contextlib import redirect_stderr
 from pathlib import Path
 from unittest.mock import patch
@@ -19,10 +19,13 @@ from arena_farmer import (
     DashboardMemory,
     DEFENSE_VANGUARD_TARGET,
     GlobalPosture,
+    HUNT_RANGER_OFFSETS,
+    HUNT_VANGUARD_OFFSETS,
     LifecycleMode,
     MAX_FLEET_UNITS,
     MAX_KNOWN_OBSTACLES,
     MAX_WORKER_TARGET,
+    MovementContext,
     RuntimeConfig,
     ResourceLedgerSnapshot,
     ThreatLevel,
@@ -30,6 +33,7 @@ from arena_farmer import (
     _emit_resource_ledger,
     _enemy_threat_cells,
     _is_turn_scoped_api_error,
+    _hunt_group_post,
     _manual_override_summary,
     _notify_systemd,
     _path_directions,
@@ -3327,6 +3331,110 @@ class CoreFarmerTests(unittest.TestCase):
                 actions.get(hunt["id"], {}).get("type"),
                 {"MOVE", "SWEEP", "SHOOT"},
             )
+
+    def test_hunt_group_formation_stays_together(self) -> None:
+        turn = make_turn(
+            resources=0,
+            units=[unit(WORKER_1, "WORKER", (0, 0))],
+        )
+        worker = next(iter(turn.workers))
+        core = turn.core
+        friendly_counts = Counter({core.position: 1})
+        context = MovementContext(
+            obstacles=set(),
+            resource_cells=set(),
+            enemy_cells=set(),
+            danger_cells=set(),
+            discouraged_cells=set(),
+            friendly_counts=friendly_counts,
+            reserved_destinations=set(),
+            core_position=core.position,
+            preplanned_units=set(),
+        )
+        targets = []
+        for member in range(len(HUNT_VANGUARD_OFFSETS)):
+            targets.append(
+                _hunt_group_post(
+                    worker,
+                    core.position,
+                    group_index=0,
+                    member_index=member,
+                    member_offsets=HUNT_VANGUARD_OFFSETS,
+                    tick=100,
+                    context=context,
+                )
+            )
+        for member in range(len(HUNT_RANGER_OFFSETS)):
+            targets.append(
+                _hunt_group_post(
+                    worker,
+                    core.position,
+                    group_index=0,
+                    member_index=member,
+                    member_offsets=HUNT_RANGER_OFFSETS,
+                    tick=100,
+                    context=context,
+                )
+            )
+        xs = [position[0] for position in targets]
+        ys = [position[1] for position in targets]
+        self.assertLessEqual(max(xs) - min(xs) + max(ys) - min(ys), 4)
+
+    def test_hunt_patrol_moves_hunt_groups_as_cluster(self) -> None:
+        tactic = CoreFarmer(
+            worker_target=1,
+            max_fleet_units=42,
+            hunt_squads=2,
+            home_squads=1,
+            raid_policy="hunt",
+            beacon_policy="hold",
+        )
+        units = [
+            unit(VANGUARD_1, "VANGUARD", (1, 0)),
+            unit(VANGUARD_2, "VANGUARD", (0, 1)),
+            unit("30000000-0000-4000-8000-000000000003", "VANGUARD", (-1, 0)),
+            unit("30000000-0000-4000-8000-000000000004", "VANGUARD", (4, 0)),
+            unit("30000000-0000-4000-8000-000000000005", "VANGUARD", (4, 1)),
+            unit(RANGER_1, "RANGER", (2, -1)),
+            unit(RANGER_2, "RANGER", (0, 2)),
+            unit("30000000-0000-4000-8000-000000000013", "RANGER", (-1, 1)),
+            unit("30000000-0000-4000-8000-000000000014", "RANGER", (-2, 0)),
+            unit("30000000-0000-4000-8000-000000000015", "RANGER", (5, 2)),
+            unit("30000000-0000-4000-8000-000000000016", "RANGER", (6, 0)),
+            unit("30000000-0000-4000-8000-000000000017", "RANGER", (6, 1)),
+        ]
+        turn = make_turn(tick=32, resources=20, units=units)
+        tactic.choose_actions(turn)
+        queued = turn.plan.model_dump(mode="json", exclude_none=True)
+        actions = queued.get("unit_actions", {})
+        hunt_ids = [
+            "30000000-0000-4000-8000-000000000004",
+            "30000000-0000-4000-8000-000000000005",
+            "30000000-0000-4000-8000-000000000015",
+            "30000000-0000-4000-8000-000000000016",
+            "30000000-0000-4000-8000-000000000017",
+        ]
+        by_id = {u["id"]: u for u in units}
+        direction_delta = {
+            "RIGHT": (1, 0),
+            "LEFT": (-1, 0),
+            "UP": (0, 1),
+            "DOWN": (0, -1),
+        }
+        destinations = []
+        for unit_id in hunt_ids:
+            action = actions.get(unit_id, {})
+            if action.get("type") != "MOVE" or not action.get("direction"):
+                continue
+            delta = direction_delta[action["direction"]]
+            position = by_id[unit_id]["position"]
+            destinations.append(
+                (position[0] + delta[0], position[1] + delta[1])
+            )
+        self.assertEqual(len(destinations), 5)
+        xs = [position[0] for position in destinations]
+        ys = [position[1] for position in destinations]
+        self.assertLessEqual(max(xs) - min(xs) + max(ys) - min(ys), 6)
 
     def test_population_hard_stops_at_fleet_cap_without_self_destruct(self) -> None:
         units = [

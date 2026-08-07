@@ -65,6 +65,9 @@ All notable changes to this project will be documented in this file. The format 
   are now auto-derived from the fleet cap (Worker target fills the remaining
   space, group count auto-scales), leaving four manual controls: fleet cap,
   home groups, stockpile target, and raid policy.
+- Hunt patrol now moves in tight group formations around a rotating sector
+  anchor instead of scattering each defender alone on the patrol ring, so
+  enemy lures cannot pick off lone Vanguards/Rangers.
 - Dashboard Units, Enemies, and Resources panels now scroll independently
   (max-height 220px) instead of stretching the whole sidebar.
 - New `--raid-policy stockpile` offense mode linked to `--resource-target`:

@@ -76,6 +76,19 @@ RANGER_GUARD_RADIUS = 2
 HUNT_PATROL_RADIUS = 12
 HUNT_UNIT_RADIUS = 28
 HUNT_SIGHTING_TTL = 24
+HUNT_PATROL_ROTATE_TICKS = 16
+HUNT_SECTOR_DELTAS = (
+    (1, 0),
+    (0, 1),
+    (-1, 0),
+    (0, -1),
+    (1, 1),
+    (1, -1),
+    (-1, 1),
+    (-1, -1),
+)
+HUNT_VANGUARD_OFFSETS = ((0, 0), (1, 0))
+HUNT_RANGER_OFFSETS = ((-1, 0), (0, 1), (0, -1))
 VANGUARD_CORE_GUARDS = 1
 RANGER_CORE_GUARDS = 1
 ISOLATED_CORE_CONFIRM_TICKS = 2
@@ -1770,6 +1783,57 @@ def _guard_post(
         if occupants:
             continue
         return destination
+    return unit.position
+
+
+def _hunt_group_post(
+    unit: Movable,
+    core_position: Position,
+    *,
+    group_index: int,
+    member_index: int,
+    member_offsets: Sequence[tuple[int, int]],
+    tick: int,
+    context: MovementContext,
+) -> Position:
+    """Return a tight formation cell for one hunt-group member near its anchor."""
+    sector = HUNT_SECTOR_DELTAS[
+        (tick // HUNT_PATROL_ROTATE_TICKS + group_index)
+        % len(HUNT_SECTOR_DELTAS)
+    ]
+    anchor = (
+        core_position[0] + sector[0] * HUNT_PATROL_RADIUS,
+        core_position[1] + sector[1] * HUNT_PATROL_RADIUS,
+    )
+    offset = member_offsets[member_index]
+    target = (anchor[0] + offset[0], anchor[1] + offset[1])
+    if target == unit.position or (
+        target not in context.obstacles
+        and target not in context.enemy_cells
+        and target not in context.danger_cells
+        and target not in context.reserved_destinations
+        and not context.friendly_counts[target]
+    ):
+        return target
+    for dx in range(-2, 3):
+        for dy in range(-2, 3):
+            if dx == 0 and dy == 0:
+                continue
+            candidate = (anchor[0] + dx, anchor[1] + dy)
+            if candidate == unit.position:
+                return candidate
+            if candidate in context.obstacles:
+                continue
+            if (
+                candidate in context.enemy_cells
+                or candidate in context.danger_cells
+            ):
+                continue
+            if candidate in context.reserved_destinations:
+                continue
+            if context.friendly_counts[candidate]:
+                continue
+            return candidate
     return unit.position
 
 
@@ -4505,27 +4569,36 @@ class CoreFarmer:
                 vanguard.wait()
                 continue
 
-            guard_radius = (
-                HUNT_PATROL_RADIUS
-                if self.raid_policy == "hunt"
+            if (
+                self.raid_policy == "hunt"
                 and index >= self.home_vanguard_count
-                else VANGUARD_GUARD_RADIUS
-            )
-            target_position = _guard_post(
-                vanguard,
-                core.position,
-                context,
-                _rotate_directions(
-                    (
-                        Direction.DOWN,
-                        Direction.UP,
-                        Direction.LEFT,
-                        Direction.RIGHT,
+            ):
+                hunt_index = index - self.home_vanguard_count
+                target_position = _hunt_group_post(
+                    vanguard,
+                    core.position,
+                    group_index=hunt_index // HUNT_SQUAD_VANGUARDS,
+                    member_index=hunt_index % HUNT_SQUAD_VANGUARDS,
+                    member_offsets=HUNT_VANGUARD_OFFSETS,
+                    tick=turn.tick,
+                    context=context,
+                )
+            else:
+                target_position = _guard_post(
+                    vanguard,
+                    core.position,
+                    context,
+                    _rotate_directions(
+                        (
+                            Direction.DOWN,
+                            Direction.UP,
+                            Direction.LEFT,
+                            Direction.RIGHT,
+                        ),
+                        index,
                     ),
-                    index,
-                ),
-                guard_radius,
-            )
+                    VANGUARD_GUARD_RADIUS,
+                )
             if target_position != vanguard.position:
                 moved = _queue_toward(
                     vanguard,
@@ -4701,27 +4774,36 @@ class CoreFarmer:
                 ranger.wait()
                 continue
 
-            guard_radius = (
-                HUNT_PATROL_RADIUS
-                if self.raid_policy == "hunt"
+            if (
+                self.raid_policy == "hunt"
                 and index >= self.home_ranger_count
-                else RANGER_GUARD_RADIUS
-            )
-            target_position = _guard_post(
-                ranger,
-                core.position,
-                context,
-                _rotate_directions(
-                    (
-                        Direction.LEFT,
-                        Direction.RIGHT,
-                        Direction.UP,
-                        Direction.DOWN,
+            ):
+                hunt_index = index - self.home_ranger_count
+                target_position = _hunt_group_post(
+                    ranger,
+                    core.position,
+                    group_index=hunt_index // HUNT_SQUAD_RANGERS,
+                    member_index=hunt_index % HUNT_SQUAD_RANGERS,
+                    member_offsets=HUNT_RANGER_OFFSETS,
+                    tick=turn.tick,
+                    context=context,
+                )
+            else:
+                target_position = _guard_post(
+                    ranger,
+                    core.position,
+                    context,
+                    _rotate_directions(
+                        (
+                            Direction.LEFT,
+                            Direction.RIGHT,
+                            Direction.UP,
+                            Direction.DOWN,
+                        ),
+                        index,
                     ),
-                    index,
-                ),
-                guard_radius,
-            )
+                    RANGER_GUARD_RADIUS,
+                )
             if target_position != ranger.position:
                 moved = _queue_toward(
                     ranger,
