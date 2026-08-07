@@ -60,6 +60,8 @@ All notable changes to this project will be documented in this file. The format 
 - Fixed a table rendering bug where array rows were interpolated directly,
   causing a visible run of commas above the Units/Enemies/Resources tables;
   empty filtered lists now show "无" instead of a blank table.
+- Units 职责 column translations added for RETURN / RETURN_BLOCKED /
+  CLEAR_CORE / CLEAR_CORE_BLOCKED; all 18 worker roles now render in Chinese.
 - Hierarchical lifecycle and threat assessment with explicit posture/reason diagnostics for alerts, pre-evasion, engagement, multi-axis breakout, recovery, and compatibility hold.
 
 ### Changed
