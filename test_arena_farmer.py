@@ -3331,6 +3331,36 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertEqual(tactic.worker_modes[UUID(WORKER_2)], "DEPOSIT_QUEUE")
         self.assertEqual(queued["unit_actions"][WORKER_2]["type"], "WAIT")
 
+    def test_cargo_worker_queues_near_core_instead_of_waiting_far_away(self) -> None:
+        turn = make_turn(
+            resources=0,
+            units=[
+                unit(WORKER_1, "WORKER", (0, 0), cargo=1),
+                unit(WORKER_2, "WORKER", (5, 0), cargo=1),
+            ],
+        )
+        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic.choose_actions(turn)
+        queued = turn.plan.model_dump(mode="json", exclude_none=True)
+
+        self.assertEqual(tactic.worker_modes[UUID(WORKER_2)], "DEPOSIT_QUEUE")
+        self.assertEqual(queued["unit_actions"][WORKER_2]["type"], "MOVE")
+
+    def test_cargo_worker_within_queue_radius_waits_in_place(self) -> None:
+        turn = make_turn(
+            resources=0,
+            units=[
+                unit(WORKER_1, "WORKER", (0, 0), cargo=1),
+                unit(WORKER_2, "WORKER", (2, 0), cargo=1),
+            ],
+        )
+        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic.choose_actions(turn)
+        queued = turn.plan.model_dump(mode="json", exclude_none=True)
+
+        self.assertEqual(tactic.worker_modes[UUID(WORKER_2)], "DEPOSIT_QUEUE")
+        self.assertEqual(queued["unit_actions"][WORKER_2]["type"], "WAIT")
+
     def test_on_core_cargo_worker_exits_when_ring_cells_occupied(self) -> None:
         turn = make_turn(
             resources=25,

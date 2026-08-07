@@ -109,6 +109,7 @@ CORE_BULK_CARGO_ETA = 4
 CORE_BULK_CARGO = 3
 CORE_CONGESTED_CARGO = 3
 CORE_DELIVERY_CHAIN_MAX = 8
+DEPOSIT_QUEUE_RADIUS = 3
 CORE_EVADE_TRIGGER_DISTANCE = 12
 CORE_EVADE_RELEASE_DISTANCE = CORE_EVADE_TRIGGER_DISTANCE + 2
 CORE_MOVE_COMMIT_PROGRESS = 2
@@ -1141,6 +1142,48 @@ def _deposit_exit_directions(
         for direction in _exploration_directions(unit)
         if direction != lane_direction
     )
+
+
+def _deposit_staging_target(
+    unit: Movable,
+    core_position: Position,
+    context: MovementContext,
+) -> Position | None:
+    """Pick a nearby, unoccupied staging cell for a queued cargo Worker."""
+    candidates: list[tuple[object, ...]] = []
+    for dx in range(-DEPOSIT_QUEUE_RADIUS, DEPOSIT_QUEUE_RADIUS + 1):
+        for dy in range(-DEPOSIT_QUEUE_RADIUS, DEPOSIT_QUEUE_RADIUS + 1):
+            distance = abs(dx) + abs(dy)
+            if distance < 2 or distance > DEPOSIT_QUEUE_RADIUS:
+                continue
+            destination = (
+                core_position[0] + dx,
+                core_position[1] + dy,
+            )
+            if not _is_signed_int64_position(destination):
+                continue
+            if destination in context.obstacles:
+                continue
+            if (
+                destination in context.enemy_cells
+                or destination in context.danger_cells
+            ):
+                continue
+            if destination in context.reserved_destinations:
+                continue
+            if context.friendly_counts[destination] >= 2:
+                continue
+            candidates.append(
+                (
+                    context.friendly_counts[destination],
+                    _distance(unit.position, destination),
+                    getattr(unit.id, "int", 0) % 1000,
+                    destination,
+                )
+            )
+    if not candidates:
+        return None
+    return min(candidates)[3]
 
 
 def _rotate_directions(
@@ -3822,6 +3865,29 @@ class CoreFarmer:
                     )
                 continue
             if worker.id != active_depositor_id:
+                if (
+                    _distance(worker.position, core.position)
+                    > DEPOSIT_QUEUE_RADIUS
+                ):
+                    staging = _deposit_staging_target(
+                        worker,
+                        core.position,
+                        context,
+                    )
+                    moved = _queue_toward(
+                        worker,
+                        staging if staging is not None else core.position,
+                        context,
+                        allow_single_friendly_transit=True,
+                    )
+                    if not moved:
+                        worker.wait()
+                    self._set_worker_mode(
+                        worker,
+                        "DEPOSIT_QUEUE" if moved else "RETURN_BLOCKED",
+                        core.position,
+                    )
+                    continue
                 worker.wait()
                 self._set_worker_mode(worker, "DEPOSIT_QUEUE", core.position)
                 continue

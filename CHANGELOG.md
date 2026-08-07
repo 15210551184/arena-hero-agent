@@ -36,6 +36,9 @@ All notable changes to this project will be documented in this file. The format 
   on the Core cell always leaves through the reserved delivery lane, using a
   legal second cell slot when the ring is occupied, so returning Workers can
   no longer deadlock around the Core.
+- Queued cargo Workers now stage near the Core (move until within 2-3 cells and
+  wait there) instead of freezing at their current position, so deposits
+  pipeline smoothly once the Core cell frees.
 - Dashboard Units, Enemies, and Resources panels now scroll independently
   (max-height 220px) instead of stretching the whole sidebar.
 - New `--raid-policy stockpile` offense mode linked to `--resource-target`:
