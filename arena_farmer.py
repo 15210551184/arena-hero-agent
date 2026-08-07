@@ -1123,6 +1123,23 @@ def _exploration_directions(unit: Movable) -> tuple[Direction, ...]:
     return CARDINAL_DIRECTIONS[offset:] + CARDINAL_DIRECTIONS[:offset]
 
 
+def _deposit_exit_directions(
+    unit: Movable,
+    context: MovementContext,
+) -> tuple[Direction, ...]:
+    """Prefer the reserved delivery lane when a cargo Worker must leave the Core."""
+    if context.delivery_lane is None:
+        return _exploration_directions(unit)
+    lane_direction = _direction_to_adjacent(unit.position, context.delivery_lane)
+    if lane_direction is None:
+        return _exploration_directions(unit)
+    return (lane_direction,) + tuple(
+        direction
+        for direction in _exploration_directions(unit)
+        if direction != lane_direction
+    )
+
+
 def _rotate_directions(
     directions: tuple[Direction, ...],
     offset: int,
@@ -3555,6 +3572,23 @@ class CoreFarmer:
                 context=context,
             )
 
+        approaching_cargo = [
+            worker
+            for worker in cargo_workers
+            if worker.id not in preplanned_units
+            and worker.position != core.position
+        ]
+        core_cell_free = context.friendly_counts[core.position] < 2
+        active_depositor_id: UUID | None = None
+        if core_cell_free and approaching_cargo:
+            active_depositor_id = min(
+                approaching_cargo,
+                key=lambda worker: (
+                    _distance(worker.position, core.position),
+                    _uuid_sort_key(worker),
+                ),
+            ).id
+
         for worker in cargo_workers:
             if worker.id in preplanned_units:
                 continue
@@ -3579,15 +3613,24 @@ class CoreFarmer:
                 else:
                     moved = _queue_move(
                         worker,
-                        _exploration_directions(worker),
+                        _deposit_exit_directions(worker, context),
                         context,
+                        allow_single_friendly_transit=True,
                     )
                     if not moved:
                         worker.wait()
+                        if context.delivery_lane is not None:
+                            context.reserved_destinations.add(
+                                context.delivery_lane
+                            )
                     self._set_worker_mode(
                         worker,
                         "CLEAR_CORE" if moved else "CLEAR_CORE_BLOCKED",
                     )
+                continue
+            if worker.id != active_depositor_id:
+                worker.wait()
+                self._set_worker_mode(worker, "DEPOSIT_QUEUE", core.position)
                 continue
             moved = _queue_toward(
                 worker,

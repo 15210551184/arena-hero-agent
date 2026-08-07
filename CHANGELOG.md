@@ -31,6 +31,11 @@ All notable changes to this project will be documented in this file. The format 
   rows each, static map layers (explored/obstacles/resources) are cached to
   offscreen canvases, and the system-dynamics panel renders only the latest
   200 entries.
+- Core deposit congestion fix: only the closest cargo Worker approaches the
+  Core each Tick (`DEPOSIT_QUEUE` holds the rest in place), and a cargo Worker
+  on the Core cell always leaves through the reserved delivery lane, using a
+  legal second cell slot when the ring is occupied, so returning Workers can
+  no longer deadlock around the Core.
 - Hierarchical lifecycle and threat assessment with explicit posture/reason diagnostics for alerts, pre-evasion, engagement, multi-axis breakout, recovery, and compatibility hold.
 
 ### Changed

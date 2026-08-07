@@ -3305,6 +3305,41 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertEqual(tactic.worker_modes[UUID(WORKER_1)], "STOCKPILE_HOLD")
         self.assertEqual(queued["unit_actions"][WORKER_1]["type"], "WAIT")
 
+    def test_cargo_workers_queue_instead_of_piling_onto_core(self) -> None:
+        turn = make_turn(
+            resources=0,
+            units=[
+                unit(WORKER_1, "WORKER", (0, 0), cargo=1),
+                unit(WORKER_2, "WORKER", (1, 0), cargo=1),
+            ],
+        )
+        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic.choose_actions(turn)
+        queued = turn.plan.model_dump(mode="json", exclude_none=True)
+
+        self.assertEqual(tactic.worker_modes[UUID(WORKER_1)], "DEPOSIT")
+        self.assertEqual(queued["unit_actions"][WORKER_1]["type"], "DEPOSIT")
+        self.assertEqual(tactic.worker_modes[UUID(WORKER_2)], "DEPOSIT_QUEUE")
+        self.assertEqual(queued["unit_actions"][WORKER_2]["type"], "WAIT")
+
+    def test_on_core_cargo_worker_exits_when_ring_cells_occupied(self) -> None:
+        turn = make_turn(
+            resources=25,
+            units=[
+                unit(WORKER_1, "WORKER", (0, 0), cargo=1),
+                unit(WORKER_2, "WORKER", (1, 0), cargo=0),
+                unit(WORKER_3, "WORKER", (0, 1), cargo=0),
+                unit(WORKER_4, "WORKER", (-1, 0), cargo=0),
+                unit(WORKER_5, "WORKER", (0, -1), cargo=0),
+            ],
+        )
+        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic.choose_actions(turn)
+        queued = turn.plan.model_dump(mode="json", exclude_none=True)
+
+        self.assertEqual(tactic.worker_modes[UUID(WORKER_1)], "CLEAR_CORE")
+        self.assertEqual(queued["unit_actions"][WORKER_1]["type"], "MOVE")
+
     def test_known_obstacles_are_bounded_near_core(self) -> None:
         tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
         for index in range(MAX_KNOWN_OBSTACLES + 500):
