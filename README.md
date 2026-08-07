@@ -198,13 +198,20 @@ Common Agent options:
 the official `unit_cost()` helper, so production above 20 units correctly
 applies the dynamic v0.14 price tiers.
 
-`--resource-target N` enables stockpile mode: once Core resources reach `N`,
-the Agent stops discretionary production and shield repair and banks income
-(emergency healing and retreat still run). Core storage is
+`--resource-target N` enables stockpile mode (default `120`): once Core
+resources reach `N`, the Agent stops discretionary production and shield repair
+and banks income (emergency healing and retreat still run). Core storage is
 `max(10, population × 5)`, so reaching a target like 150 requires a fleet of at
 least 30 units (for example `ARENA_WORKER_TARGET=26` plus the normal defense
 fleet). In Docker Compose set `ARENA_RESOURCE_TARGET` in your environment; the
 systemd path reads it from `deploy/arena-hero-runtime.env`.
+
+The dashboard "运行设置" panel can change the stockpile target and raid policy
+at runtime without touching `.env`: changes are applied live and persisted to
+`runtime-config.json` beside the dashboard memory file (Docker Compose keeps it
+in the `/data` volume, so it survives rebuilds). If the dashboard port is
+reachable from the public internet, anyone can change these settings, so keep
+it behind a firewall or reverse-proxy auth.
 
 `--raid-policy stockpile` links the bank to offense: once resources reach
 `--resource-target`, the Agent selects the nearest visible or remembered enemy

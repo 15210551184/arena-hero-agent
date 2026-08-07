@@ -38,7 +38,7 @@ services:
       - --worker-target
       - "${ARENA_WORKER_TARGET:-12}"
       - --resource-target
-      - "${ARENA_RESOURCE_TARGET:-0}"
+      - "${ARENA_RESOURCE_TARGET:-120}"
       - --raid-policy
       - "${ARENA_RAID_POLICY:-off}"
       - --beacon-policy

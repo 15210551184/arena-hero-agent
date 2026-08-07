@@ -45,7 +45,7 @@ DEFAULT_COMPATIBILITY_MARKER = Path(
     "/var/lib/arena-hero-version/compatibility-hold.json"
 )
 DEFAULT_WORKER_TARGET = 12
-DEFAULT_RESOURCE_TARGET = 0
+DEFAULT_RESOURCE_TARGET = 120
 DEFAULT_RAID_POLICY = "off"
 DEFAULT_BEACON_POLICY = "retreat"
 BASE_WORKER_TARGET = 6
@@ -1814,6 +1814,73 @@ def _uuid_sort_key(obj: object) -> bytes:
 
 def _unit_max_hp(unit_type: UnitType) -> int:
     return 4 if unit_type is UnitType.VANGUARD else 2
+
+
+class RuntimeConfig:
+    """Mutable CoreFarmer tuning, persisted beside the dashboard memory."""
+
+    def __init__(self, tactic: CoreFarmer, path: Path) -> None:
+        self._tactic = tactic
+        self._path = path
+
+    def load(self) -> None:
+        try:
+            payload = json.loads(self._path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(payload, dict):
+            return
+        try:
+            self.apply(payload, persist=False)
+        except ValueError as exc:
+            print(f"WARNING runtime config ignored: {exc}", file=sys.stderr)
+
+    def snapshot(self) -> dict[str, object]:
+        return {
+            "resource_target": self._tactic.resource_target,
+            "raid_policy": self._tactic.raid_policy,
+        }
+
+    def apply(
+        self,
+        payload: Mapping[str, object],
+        *,
+        persist: bool = True,
+    ) -> dict[str, object]:
+        new_target = self._tactic.resource_target
+        new_policy = self._tactic.raid_policy
+        resource_target = payload.get("resource_target")
+        if resource_target is not None:
+            if (
+                not isinstance(resource_target, int)
+                or isinstance(resource_target, bool)
+                or not 0 <= resource_target <= 1_000_000
+            ):
+                raise ValueError(
+                    "resource_target must be an integer between 0 and 1000000"
+                )
+            new_target = resource_target
+        raid_policy = payload.get("raid_policy")
+        if raid_policy is not None:
+            if raid_policy not in {"off", "stockpile"}:
+                raise ValueError("raid_policy must be 'off' or 'stockpile'")
+            new_policy = raid_policy
+        if new_policy == "stockpile" and new_target <= 0:
+            raise ValueError(
+                "raid_policy 'stockpile' requires resource_target > 0"
+            )
+        self._tactic.resource_target = new_target
+        self._tactic.raid_policy = new_policy
+        if persist:
+            self._save()
+        return self.snapshot()
+
+    def _save(self) -> None:
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(self._path, self.snapshot())
+        except OSError as exc:
+            print(f"WARNING runtime config save failed: {exc}", file=sys.stderr)
 
 
 class CoreFarmer:
@@ -5319,6 +5386,11 @@ def play(
         beacon_policy=beacon_policy,
         compatibility_marker=compatibility_marker,
     )
+    runtime_config = RuntimeConfig(
+        tactic,
+        dashboard_memory_file.with_name("runtime-config.json"),
+    )
+    runtime_config.load()
     last_accepted_tick: int | None = None
     resource_ledger_snapshot: ResourceLedgerSnapshot | None = None
     memory = DashboardMemory.load(dashboard_memory_file)
@@ -5341,6 +5413,7 @@ def play(
                     ),
                 },
                 api_key=api_key,
+                config_store=runtime_config,
             )
     with ArenaHeroClient(api_key=api_key, base_url=base_url) as game:
         watchdog = _AcceptedTurnWatchdog(game, stale_turn_timeout_seconds)

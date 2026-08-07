@@ -23,6 +23,7 @@ from arena_farmer import (
     MAX_FLEET_UNITS,
     MAX_KNOWN_OBSTACLES,
     MAX_WORKER_TARGET,
+    RuntimeConfig,
     ResourceLedgerSnapshot,
     ThreatLevel,
     build_snapshot,
@@ -293,7 +294,7 @@ class DashboardSnapshotTests(unittest.TestCase):
         self.assertLessEqual(len(snapshot["history"]), 1000)
         self.assertIn("unit_actions", snapshot["plan"])
         self.assertEqual(snapshot["tactic"]["worker_target"], 12)
-        self.assertEqual(snapshot["tactic"]["resource_target"], 0)
+        self.assertEqual(snapshot["tactic"]["resource_target"], 120)
         self.assertEqual(snapshot["tactic"]["raid_policy"], "off")
         self.assertIs(snapshot["tactic"]["raid_active"], False)
         self.assertIs(snapshot["tactic"]["stockpile_active"], False)
@@ -3361,6 +3362,44 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertIn((2, 0), tactic.known_obstacles)
         self.assertIn((3, 0), tactic.known_obstacles)
 
+    def test_runtime_config_persists_and_reloads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime-config.json"
+            tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+            store = RuntimeConfig(tactic, path)
+            snapshot = store.apply(
+                {"resource_target": 150, "raid_policy": "stockpile"}
+            )
+
+            self.assertEqual(snapshot["resource_target"], 150)
+            self.assertEqual(snapshot["raid_policy"], "stockpile")
+            self.assertEqual(tactic.resource_target, 150)
+            self.assertEqual(tactic.raid_policy, "stockpile")
+
+            reloaded = CoreFarmer(worker_target=1, beacon_policy="hold")
+            RuntimeConfig(reloaded, path).load()
+            self.assertEqual(reloaded.resource_target, 150)
+            self.assertEqual(reloaded.raid_policy, "stockpile")
+
+    def test_runtime_config_rejects_invalid_values_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime-config.json"
+            tactic = CoreFarmer(
+                worker_target=1,
+                resource_target=100,
+                beacon_policy="hold",
+            )
+            store = RuntimeConfig(tactic, path)
+
+            with self.assertRaises(ValueError):
+                store.apply({"raid_policy": "stockpile", "resource_target": 0})
+            self.assertEqual(tactic.raid_policy, "off")
+            self.assertEqual(tactic.resource_target, 100)
+
+            with self.assertRaises(ValueError):
+                store.apply({"resource_target": "150"})
+            self.assertEqual(tactic.resource_target, 100)
+
     @staticmethod
     def _raid_fleet() -> list[dict[str, object]]:
         workers = [
@@ -4417,7 +4456,7 @@ class EventLoopTests(unittest.TestCase):
     def test_dashboard_defaults(self) -> None:
         args = build_parser().parse_args([])
         self.assertFalse(args.no_dashboard)
-        self.assertEqual(args.resource_target, 0)
+        self.assertEqual(args.resource_target, 120)
         self.assertEqual(args.dashboard_port, 8765)
         self.assertEqual(args.dashboard_host, "127.0.0.1")
         self.assertEqual(args.snapshot_file, Path("snapshot.json"))

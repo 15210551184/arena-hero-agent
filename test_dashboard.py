@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -13,11 +14,26 @@ from urllib.request import urlopen
 import dashboard.server as server
 
 
+class _StubConfig:
+    def __init__(self) -> None:
+        self.values = {"resource_target": 120, "raid_policy": "off"}
+
+    def snapshot(self) -> dict[str, object]:
+        return dict(self.values)
+
+    def apply(self, payload: dict[str, object]) -> dict[str, object]:
+        for key in ("resource_target", "raid_policy"):
+            if key in payload:
+                self.values[key] = payload[key]
+        return self.snapshot()
+
+
 class DashboardServerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory()
         self.root = Path(self.directory.name)
         self.snapshot_path = self.root / "snapshot.json"
+        self.config_store = _StubConfig()
         self.httpd = server.start_dashboard_thread(
             port=0,
             host="127.0.0.1",
@@ -28,6 +44,7 @@ class DashboardServerTests(unittest.TestCase):
                 "last_activity_seconds_ago": 1.0,
             },
             api_key="test-only-key",
+            config_store=self.config_store,
         )
         self.base = f"http://127.0.0.1:{self.httpd.server_address[1]}"
 
@@ -77,6 +94,43 @@ class DashboardServerTests(unittest.TestCase):
             thread.join(timeout=3)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["tick"], 6)
+
+    def test_api_config_get_and_post(self) -> None:
+        status, body = self.get("/api/config")
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            json.loads(body),
+            {"resource_target": 120, "raid_policy": "off"},
+        )
+
+        request = urllib.request.Request(
+            self.base + "/api/config",
+            data=json.dumps(
+                {"resource_target": 150, "raid_policy": "stockpile"}
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            payload = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(payload["resource_target"], 150)
+        self.assertEqual(payload["raid_policy"], "stockpile")
+        self.assertEqual(
+            self.config_store.values,
+            {"resource_target": 150, "raid_policy": "stockpile"},
+        )
+
+    def test_api_config_rejects_invalid_body(self) -> None:
+        request = urllib.request.Request(
+            self.base + "/api/config",
+            data=b"not json",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=5)
+        self.assertEqual(context.exception.code, 400)
 
     def test_unknown_route_returns_404(self) -> None:
         with self.assertRaises(HTTPError):

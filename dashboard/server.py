@@ -29,6 +29,7 @@ SNAPSHOT: Path = PROJECT / "snapshot.json"
 STATE: Path = PROJECT / "state.json"
 STATUS_PROVIDER: Callable[[], dict[str, Any] | None] | None = None
 API_KEY: str | None = None
+CONFIG_STORE: Any = None
 
 POLL_STEP = 0.2
 MAX_WAIT = 25.0
@@ -240,8 +241,57 @@ class Handler(BaseHTTPRequestHandler):
                 ),
                 "application/json; charset=utf-8",
             )
+        elif path == "/api/config":
+            if CONFIG_STORE is None:
+                self._send_bytes(
+                    json.dumps({"error": "config store unavailable"}).encode(
+                        "utf-8"
+                    ),
+                    "application/json; charset=utf-8",
+                    status=404,
+                )
+            else:
+                self._send_bytes(
+                    json.dumps(
+                        CONFIG_STORE.snapshot(),
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                    "application/json; charset=utf-8",
+                )
         else:
             self.send_error(404)
+
+    def do_POST(self) -> None:
+        path, _, _ = self.path.partition("?")
+        if path != "/api/config":
+            self.send_error(404)
+            return
+        if CONFIG_STORE is None:
+            self._send_bytes(
+                json.dumps({"error": "config store unavailable"}).encode(
+                    "utf-8"
+                ),
+                "application/json; charset=utf-8",
+                status=404,
+            )
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("body must be a JSON object")
+            snapshot = CONFIG_STORE.apply(payload)
+        except (ValueError, json.JSONDecodeError) as exc:
+            self._send_bytes(
+                json.dumps({"error": str(exc)}).encode("utf-8"),
+                "application/json; charset=utf-8",
+                status=400,
+            )
+            return
+        self._send_bytes(
+            json.dumps(snapshot, ensure_ascii=False).encode("utf-8"),
+            "application/json; charset=utf-8",
+        )
 
     def _send_file(self, path: Path, ctype: str) -> None:
         if not path.exists():
@@ -249,9 +299,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send_bytes(path.read_bytes(), ctype)
 
-    def _send_bytes(self, body: bytes, ctype: str) -> None:
+    def _send_bytes(self, body: bytes, ctype: str, *, status: int = 200) -> None:
         try:
-            self.send_response(200)
+            self.send_response(status)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
@@ -270,12 +320,14 @@ def start_dashboard_thread(
     snapshot_path: Path | None = None,
     status_provider=None,
     api_key: str | None = None,
+    config_store=None,
 ):
-    global SNAPSHOT, STATUS_PROVIDER, API_KEY
+    global SNAPSHOT, STATUS_PROVIDER, API_KEY, CONFIG_STORE
     if snapshot_path is not None:
         SNAPSHOT = Path(snapshot_path)
     STATUS_PROVIDER = status_provider
     API_KEY = api_key
+    CONFIG_STORE = config_store
     try:
         httpd = ThreadingHTTPServer((host, port), Handler)
     except OSError as exc:
