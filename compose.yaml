@@ -41,6 +41,8 @@ services:
       - "${ARENA_MAX_FLEET_UNITS:-34}"
       - --hunt-squads
       - "${ARENA_HUNT_SQUADS:-0}"
+      - --home-squads
+      - "${ARENA_HOME_SQUADS:-1}"
       - --resource-target
       - "${ARENA_RESOURCE_TARGET:-120}"
       - --raid-policy

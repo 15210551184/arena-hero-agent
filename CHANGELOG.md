@@ -58,6 +58,9 @@ All notable changes to this project will be documented in this file. The format 
   auto-derived from the fleet cap (`max(1, (cap − 20) / 8)`) or overridable
   via `--hunt-squads`. Raising the cap now grows combat groups instead of
   adding only Workers.
+- `--home-squads N` (default 1) keeps N hunt groups at home guarding the Core;
+  only the remaining groups patrol and strike, so raids and hunts never strip
+  the home defense.
 - Dashboard Units, Enemies, and Resources panels now scroll independently
   (max-height 220px) instead of stretching the whole sidebar.
 - New `--raid-policy stockpile` offense mode linked to `--resource-target`:

@@ -296,8 +296,11 @@ class DashboardSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot["tactic"]["worker_target"], 12)
         self.assertEqual(snapshot["tactic"]["max_fleet_units"], 34)
         self.assertEqual(snapshot["tactic"]["hunt_squads"], 1)
+        self.assertEqual(snapshot["tactic"]["home_squads"], 1)
         self.assertEqual(snapshot["tactic"]["defense_vanguard_target"], 3)
         self.assertEqual(snapshot["tactic"]["defense_ranger_target"], 4)
+        self.assertEqual(snapshot["tactic"]["home_vanguard_count"], 3)
+        self.assertEqual(snapshot["tactic"]["home_ranger_count"], 4)
         self.assertEqual(snapshot["tactic"]["resource_target"], 120)
         self.assertEqual(snapshot["tactic"]["raid_policy"], "off")
         self.assertIs(snapshot["tactic"]["raid_active"], False)
@@ -2304,7 +2307,7 @@ class CoreFarmerTests(unittest.TestCase):
         )
 
     def test_confirmed_isolated_core_uses_strike_group_and_keeps_guards(self) -> None:
-        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic = CoreFarmer(worker_target=1, home_squads=0, beacon_policy="hold")
         units = [
             unit(VANGUARD_1, "VANGUARD", (0, -3)),
             unit(VANGUARD_2, "VANGUARD", (3, 0)),
@@ -2334,7 +2337,7 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertEqual(queued["core_action"]["type"], "WAIT")
 
     def test_minimum_defense_fleet_raids_exposed_core_and_keeps_guards(self) -> None:
-        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic = CoreFarmer(worker_target=1, home_squads=0, beacon_policy="hold")
         defenders = [
             unit(VANGUARD_1, "VANGUARD", (0, 3)),
             unit(VANGUARD_2, "VANGUARD", (3, 0)),
@@ -2364,7 +2367,7 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertEqual(queued["unit_actions"][RANGER_2]["type"], "SHOOT")
 
     def test_core_confirmation_bridges_intermittent_visibility(self) -> None:
-        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic = CoreFarmer(worker_target=1, home_squads=0, beacon_policy="hold")
         units = [
             unit(WORKER_1, "WORKER", (2, 0), cargo=0),
             unit(VANGUARD_1, "VANGUARD", (0, 3)),
@@ -2464,7 +2467,7 @@ class CoreFarmerTests(unittest.TestCase):
         )
 
     def test_distant_core_uses_nearby_strike_pair_and_keeps_observer(self) -> None:
-        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic = CoreFarmer(worker_target=1, home_squads=0, beacon_policy="hold")
         units = [
             unit(WORKER_1, "WORKER", (27, 0), cargo=0),
             unit(VANGUARD_1, "VANGUARD", (0, -3)),
@@ -2497,7 +2500,7 @@ class CoreFarmerTests(unittest.TestCase):
         )
 
     def test_combat_pressure_releases_core_raid_and_recalls_strike_pair(self) -> None:
-        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic = CoreFarmer(worker_target=1, home_squads=0, beacon_policy="hold")
         defenders = [
             unit(VANGUARD_1, "VANGUARD", (0, -3)),
             unit(VANGUARD_2, "VANGUARD", (1, 0)),
@@ -2537,7 +2540,7 @@ class CoreFarmerTests(unittest.TestCase):
         )
 
     def test_long_range_core_raid_accepts_operational_boundary(self) -> None:
-        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic = CoreFarmer(worker_target=1, home_squads=0, beacon_policy="hold")
         defenders = [
             unit(VANGUARD_1, "VANGUARD", (0, 3)),
             unit(VANGUARD_2, "VANGUARD", (1, 0)),
@@ -2567,7 +2570,7 @@ class CoreFarmerTests(unittest.TestCase):
         )
 
     def test_long_range_core_raid_rejects_target_beyond_boundary(self) -> None:
-        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic = CoreFarmer(worker_target=1, home_squads=0, beacon_policy="hold")
         defenders = [
             unit(VANGUARD_1, "VANGUARD", (0, 3)),
             unit(VANGUARD_2, "VANGUARD", (1, 0)),
@@ -2587,7 +2590,7 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertIsNone(tactic.isolated_core_target_id)
 
     def test_active_core_raid_releases_when_strike_group_is_pulled_too_far(self) -> None:
-        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic = CoreFarmer(worker_target=1, home_squads=0, beacon_policy="hold")
         defenders = [
             unit(VANGUARD_1, "VANGUARD", (0, 3)),
             unit(VANGUARD_2, "VANGUARD", (1, 0)),
@@ -2664,7 +2667,7 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertIsNone(tactic.isolated_core_target_id)
 
     def test_spotted_core_dispatches_strike_pair_within_operational_range(self) -> None:
-        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic = CoreFarmer(worker_target=1, home_squads=0, beacon_policy="hold")
         units = [
             unit(WORKER_1, "WORKER", (17, 0), cargo=0),
             unit(VANGUARD_1, "VANGUARD", (0, 3)),
@@ -2689,7 +2692,7 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertEqual(queued["unit_actions"][RANGER_2]["type"], "MOVE")
 
     def test_core_raid_continues_toward_recent_memory_without_visibility(self) -> None:
-        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic = CoreFarmer(worker_target=1, home_squads=0, beacon_policy="hold")
         defenders = [
             unit(VANGUARD_1, "VANGUARD", (0, -3)),
             unit(VANGUARD_2, "VANGUARD", (20, 0)),
@@ -2723,7 +2726,7 @@ class CoreFarmerTests(unittest.TestCase):
         )
 
     def test_core_raid_uses_cell_fire_during_short_visibility_gap(self) -> None:
-        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic = CoreFarmer(worker_target=1, home_squads=0, beacon_policy="hold")
         defenders = [
             unit(VANGUARD_1, "VANGUARD", (0, -3)),
             unit(VANGUARD_2, "VANGUARD", (20, 0)),
@@ -2750,7 +2753,7 @@ class CoreFarmerTests(unittest.TestCase):
         )
 
     def test_core_raid_releases_position_when_strike_group_observes_it_empty(self) -> None:
-        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic = CoreFarmer(worker_target=1, home_squads=0, beacon_policy="hold")
         distant_defenders = [
             unit(VANGUARD_1, "VANGUARD", (0, -3)),
             unit(VANGUARD_2, "VANGUARD", (20, 0)),
@@ -2807,7 +2810,7 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertEqual(queued["core_action"]["type"], "START_MOVE")
 
     def test_core_raid_continues_while_own_core_is_moving_away(self) -> None:
-        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic = CoreFarmer(worker_target=1, home_squads=0, beacon_policy="hold")
         defenders = [
             unit(VANGUARD_1, "VANGUARD", (0, 3)),
             unit(VANGUARD_2, "VANGUARD", (3, 0)),
@@ -2842,7 +2845,7 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertEqual(queued["unit_actions"][RANGER_2]["type"], "SHOOT")
 
     def test_static_worker_is_cleared_by_strike_pair_after_confirmation(self) -> None:
-        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic = CoreFarmer(worker_target=1, home_squads=0, beacon_policy="hold")
         defenders = [
             unit(VANGUARD_1, "VANGUARD", (0, 3)),
             unit(VANGUARD_2, "VANGUARD", (3, 0)),
@@ -2872,7 +2875,7 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertEqual(queued["unit_actions"][RANGER_2]["type"], "SHOOT")
 
     def test_static_worker_uses_only_two_rangers_with_full_defense_fleet(self) -> None:
-        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic = CoreFarmer(worker_target=1, home_squads=0, beacon_policy="hold")
         defenders = [
             unit(VANGUARD_1, "VANGUARD", (0, -3)),
             unit(VANGUARD_2, "VANGUARD", (3, 1)),
@@ -3122,7 +3125,7 @@ class CoreFarmerTests(unittest.TestCase):
         )
 
     def test_stationary_core_memory_discourages_repeated_route(self) -> None:
-        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic = CoreFarmer(worker_target=1, home_squads=0, beacon_policy="hold")
         defenders = [
             unit(VANGUARD_1, "VANGUARD", (0, 3)),
             unit(VANGUARD_2, "VANGUARD", (0, -3)),
@@ -3190,13 +3193,18 @@ class CoreFarmerTests(unittest.TestCase):
     def test_hunt_squads_auto_derive_from_fleet_cap(self) -> None:
         default = CoreFarmer(max_fleet_units=34)
         self.assertEqual(default.hunt_squads, 1)
+        self.assertEqual(default.home_squads, 1)
         self.assertEqual(default.defense_vanguard_target, 3)
         self.assertEqual(default.defense_ranger_target, 4)
+        self.assertEqual(default.home_vanguard_count, 3)
+        self.assertEqual(default.home_ranger_count, 4)
 
         larger = CoreFarmer(max_fleet_units=50, worker_target=33)
         self.assertEqual(larger.hunt_squads, 3)
         self.assertEqual(larger.defense_vanguard_target, 7)
         self.assertEqual(larger.defense_ranger_target, 10)
+        self.assertEqual(larger.home_vanguard_count, 3)
+        self.assertEqual(larger.home_ranger_count, 4)
         with self.assertRaisesRegex(ValueError, "between 1 and 33"):
             CoreFarmer(max_fleet_units=50, worker_target=34)
 
@@ -3208,11 +3216,116 @@ class CoreFarmerTests(unittest.TestCase):
         )
         self.assertEqual(tactic.defense_vanguard_target, 5)
         self.assertEqual(tactic.defense_ranger_target, 7)
+        self.assertEqual(tactic.home_vanguard_count, 3)
+        self.assertEqual(tactic.home_ranger_count, 4)
         with self.assertRaisesRegex(ValueError, "between 1 and 22"):
             CoreFarmer(
                 max_fleet_units=34,
                 hunt_squads=2,
                 worker_target=23,
+            )
+
+    def test_home_squads_validation_and_composition(self) -> None:
+        tactic = CoreFarmer(
+            max_fleet_units=50,
+            hunt_squads=3,
+            home_squads=2,
+            worker_target=28,
+        )
+        self.assertEqual(tactic.home_vanguard_count, 5)
+        self.assertEqual(tactic.home_ranger_count, 7)
+        with self.assertRaisesRegex(ValueError, "must not exceed hunt groups"):
+            CoreFarmer(max_fleet_units=50, hunt_squads=1, home_squads=2)
+        with self.assertRaisesRegex(ValueError, "between 0 and 3"):
+            CoreFarmer(home_squads=4)
+
+    def test_core_raid_uses_hunt_groups_only_with_home_groups(self) -> None:
+        tactic = CoreFarmer(
+            worker_target=1,
+            max_fleet_units=42,
+            hunt_squads=2,
+            home_squads=1,
+            beacon_policy="hold",
+        )
+        home_vanguards = [
+            unit(VANGUARD_1, "VANGUARD", (1, 0)),
+            unit(VANGUARD_2, "VANGUARD", (0, 1)),
+            unit(
+                "30000000-0000-4000-8000-000000000003",
+                "VANGUARD",
+                (-1, 0),
+            ),
+        ]
+        hunt_vanguards = [
+            unit(
+                "30000000-0000-4000-8000-000000000004",
+                "VANGUARD",
+                (6, 0),
+            ),
+            unit(
+                "30000000-0000-4000-8000-000000000005",
+                "VANGUARD",
+                (7, 1),
+            ),
+        ]
+        home_rangers = [
+            unit(RANGER_1, "RANGER", (2, 0)),
+            unit(RANGER_2, "RANGER", (0, 2)),
+            unit(
+                "30000000-0000-4000-8000-000000000013",
+                "RANGER",
+                (-2, 0),
+            ),
+            unit(
+                "30000000-0000-4000-8000-000000000014",
+                "RANGER",
+                (0, -2),
+            ),
+        ]
+        hunt_rangers = [
+            unit(
+                "30000000-0000-4000-8000-000000000015",
+                "RANGER",
+                (5, 2),
+            ),
+            unit(
+                "30000000-0000-4000-8000-000000000016",
+                "RANGER",
+                (6, -1),
+            ),
+            unit(
+                "30000000-0000-4000-8000-000000000017",
+                "RANGER",
+                (7, 2),
+            ),
+        ]
+        units = [
+            *home_vanguards,
+            *hunt_vanguards,
+            *home_rangers,
+            *hunt_rangers,
+        ]
+        for tick in (100, 101, 102):
+            turn = make_turn(
+                tick=tick,
+                resources=20,
+                units=units,
+                enemies=[enemy_core(ENEMY_1, (8, 0))],
+            )
+            tactic.choose_actions(turn)
+
+        queued = turn.plan.model_dump(mode="json", exclude_none=True)
+        actions = queued.get("unit_actions", {})
+        self.assertEqual(tactic.isolated_core_target_id, UUID(ENEMY_1))
+        for home in (*home_vanguards, *home_rangers):
+            self.assertNotIn(
+                actions.get(home["id"], {}).get("type"),
+                {"SWEEP", "SHOOT"},
+            )
+        for hunt in (*hunt_vanguards, *hunt_rangers):
+            self.assertIn(
+                actions.get(hunt["id"], {}).get("type"),
+                {"MOVE", "SWEEP", "SHOOT"},
             )
 
     def test_population_hard_stops_at_fleet_cap_without_self_destruct(self) -> None:
@@ -3461,6 +3574,7 @@ class CoreFarmerTests(unittest.TestCase):
                     "worker_target": 33,
                     "max_fleet_units": 50,
                     "hunt_squads": 0,
+                    "home_squads": 2,
                 }
             )
 
@@ -3469,13 +3583,17 @@ class CoreFarmerTests(unittest.TestCase):
             self.assertEqual(snapshot["worker_target"], 33)
             self.assertEqual(snapshot["max_fleet_units"], 50)
             self.assertEqual(snapshot["hunt_squads"], 3)
+            self.assertEqual(snapshot["home_squads"], 2)
             self.assertEqual(tactic.resource_target, 150)
             self.assertEqual(tactic.raid_policy, "stockpile")
             self.assertEqual(tactic.worker_target, 33)
             self.assertEqual(tactic.max_fleet_units, 50)
             self.assertEqual(tactic.hunt_squads, 3)
+            self.assertEqual(tactic.home_squads, 2)
             self.assertEqual(tactic.defense_vanguard_target, 7)
             self.assertEqual(tactic.defense_ranger_target, 10)
+            self.assertEqual(tactic.home_vanguard_count, 5)
+            self.assertEqual(tactic.home_ranger_count, 7)
 
             reloaded = CoreFarmer(worker_target=1, beacon_policy="hold")
             RuntimeConfig(reloaded, path).load()
@@ -3484,6 +3602,7 @@ class CoreFarmerTests(unittest.TestCase):
             self.assertEqual(reloaded.worker_target, 33)
             self.assertEqual(reloaded.max_fleet_units, 50)
             self.assertEqual(reloaded.hunt_squads, 3)
+            self.assertEqual(reloaded.home_squads, 2)
 
     def test_runtime_config_rejects_invalid_values_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3565,6 +3684,7 @@ class CoreFarmerTests(unittest.TestCase):
             worker_target=15,
             resource_target=100,
             raid_policy="stockpile",
+            home_squads=0,
             beacon_policy="hold",
         )
         tactic.choose_actions(turn)
@@ -3649,6 +3769,7 @@ class CoreFarmerTests(unittest.TestCase):
             worker_target=17,
             resource_target=120,
             raid_policy="stockpile",
+            home_squads=0,
             beacon_policy="hold",
         )
         tactic.choose_actions(turn)
@@ -3667,6 +3788,7 @@ class CoreFarmerTests(unittest.TestCase):
             worker_target=15,
             resource_target=0,
             raid_policy="hunt",
+            home_squads=0,
             beacon_policy="hold",
         )
         tactic.choose_actions(turn)
@@ -3684,6 +3806,7 @@ class CoreFarmerTests(unittest.TestCase):
             worker_target=15,
             resource_target=0,
             raid_policy="hunt",
+            home_squads=0,
             beacon_policy="hold",
         )
         tactic.choose_actions(turn)
@@ -4466,7 +4589,7 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertEqual(tactic.recent_attack_threats, {})
 
     def test_remote_interceptor_forces_raid_squad_to_disengage(self) -> None:
-        tactic = CoreFarmer(worker_target=1, beacon_policy="hold")
+        tactic = CoreFarmer(worker_target=1, home_squads=0, beacon_policy="hold")
         defenders = [
             unit(VANGUARD_1, "VANGUARD", (0, 3)),
             unit(VANGUARD_2, "VANGUARD", (15, 0)),
@@ -4691,6 +4814,14 @@ class EventLoopTests(unittest.TestCase):
         self.assertEqual(
             parser.parse_args(["--hunt-squads", "3"]).hunt_squads,
             3,
+        )
+
+    def test_home_squads_cli_flag_parses(self) -> None:
+        parser = build_parser()
+        self.assertEqual(parser.parse_args([]).home_squads, 1)
+        self.assertEqual(
+            parser.parse_args(["--home-squads", "2"]).home_squads,
+            2,
         )
 
     def test_play_writes_dashboard_snapshot(self) -> None:

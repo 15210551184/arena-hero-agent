@@ -8,6 +8,7 @@ ENV_FILE=${ARENA_HERO_ENV_FILE:-$PROJECT_ROOT/.env}
 WORKER_TARGET=${ARENA_WORKER_TARGET:-12}
 MAX_FLEET_UNITS=${ARENA_MAX_FLEET_UNITS:-34}
 HUNT_SQUADS=${ARENA_HUNT_SQUADS:-0}
+HOME_SQUADS=${ARENA_HOME_SQUADS:-1}
 RESOURCE_TARGET=${ARENA_RESOURCE_TARGET:-120}
 RAID_POLICY=${ARENA_RAID_POLICY:-off}
 BEACON_POLICY=${ARENA_BEACON_POLICY:-retreat}
@@ -24,6 +25,7 @@ while :; do
         --worker-target "$WORKER_TARGET" \
         --max-fleet-units "$MAX_FLEET_UNITS" \
         --hunt-squads "$HUNT_SQUADS" \
+        --home-squads "$HOME_SQUADS" \
         --resource-target "$RESOURCE_TARGET" \
         --raid-policy "$RAID_POLICY" \
         --beacon-policy "$BEACON_POLICY" \

@@ -667,8 +667,11 @@ def build_snapshot(
             "worker_target": tactic.worker_target,
             "max_fleet_units": tactic.max_fleet_units,
             "hunt_squads": tactic.hunt_squads,
+            "home_squads": tactic.home_squads,
             "defense_vanguard_target": tactic.defense_vanguard_target,
             "defense_ranger_target": tactic.defense_ranger_target,
+            "home_vanguard_count": tactic.home_vanguard_count,
+            "home_ranger_count": tactic.home_ranger_count,
             "resource_target": tactic.resource_target,
             "raid_policy": tactic.raid_policy,
             "raid_active": tactic.raid_active,
@@ -1913,8 +1916,11 @@ class RuntimeConfig:
             "worker_target": self._tactic.worker_target,
             "max_fleet_units": self._tactic.max_fleet_units,
             "hunt_squads": self._tactic.hunt_squads,
+            "home_squads": self._tactic.home_squads,
             "defense_vanguard_target": self._tactic.defense_vanguard_target,
             "defense_ranger_target": self._tactic.defense_ranger_target,
+            "home_vanguard_count": self._tactic.home_vanguard_count,
+            "home_ranger_count": self._tactic.home_ranger_count,
         }
 
     def apply(
@@ -1928,6 +1934,7 @@ class RuntimeConfig:
         new_worker_target = self._tactic.worker_target
         new_max_fleet = self._tactic.max_fleet_units
         new_hunt_squads = self._tactic.hunt_squads
+        new_home_squads = self._tactic.home_squads
         resource_target = payload.get("resource_target")
         if resource_target is not None:
             if (
@@ -1990,6 +1997,27 @@ class RuntimeConfig:
             HOME_DEFENSE_VANGUARDS + squads * HUNT_SQUAD_VANGUARDS
         )
         defense_rangers = HOME_DEFENSE_RANGERS + squads * HUNT_SQUAD_RANGERS
+        home_squads = payload.get("home_squads")
+        if home_squads is not None:
+            if (
+                not isinstance(home_squads, int)
+                or isinstance(home_squads, bool)
+                or not 0 <= home_squads <= 3
+            ):
+                raise ValueError(
+                    "home_squads must be an integer between 0 and 3"
+                )
+            new_home_squads = home_squads
+        if new_home_squads > squads:
+            raise ValueError(
+                f"home_squads must not exceed hunt groups ({squads})"
+            )
+        home_vanguards = (
+            HOME_DEFENSE_VANGUARDS + new_home_squads * HUNT_SQUAD_VANGUARDS
+        )
+        home_rangers = (
+            HOME_DEFENSE_RANGERS + new_home_squads * HUNT_SQUAD_RANGERS
+        )
         max_worker_target = new_max_fleet - defense_vanguards - defense_rangers
         if not 1 <= new_worker_target <= max_worker_target:
             raise ValueError(
@@ -2004,8 +2032,11 @@ class RuntimeConfig:
         self._tactic.worker_target = new_worker_target
         self._tactic.max_fleet_units = new_max_fleet
         self._tactic.hunt_squads = squads
+        self._tactic.home_squads = new_home_squads
         self._tactic.defense_vanguard_target = defense_vanguards
         self._tactic.defense_ranger_target = defense_rangers
+        self._tactic.home_vanguard_count = home_vanguards
+        self._tactic.home_ranger_count = home_rangers
         if persist:
             self._save()
         return self.snapshot()
@@ -2027,6 +2058,7 @@ class CoreFarmer:
         raid_policy: str = DEFAULT_RAID_POLICY,
         max_fleet_units: int = MAX_FLEET_UNITS,
         hunt_squads: int = 0,
+        home_squads: int = 1,
         beacon_policy: str = DEFAULT_BEACON_POLICY,
         compatibility_marker: Path | None = DEFAULT_COMPATIBILITY_MARKER,
     ) -> None:
@@ -2041,12 +2073,25 @@ class CoreFarmer:
                 1,
                 (max_fleet_units - HUNT_SQUAD_BASE) // HUNT_SQUAD_SIZE,
             )
+        if not 0 <= home_squads <= 3:
+            raise ValueError("home_squads must be between 0 and 3")
+        if home_squads > hunt_squads:
+            raise ValueError(
+                f"home_squads must not exceed hunt groups ({hunt_squads})"
+            )
         self.hunt_squads = hunt_squads
+        self.home_squads = home_squads
         self.defense_vanguard_target = (
             HOME_DEFENSE_VANGUARDS + hunt_squads * HUNT_SQUAD_VANGUARDS
         )
         self.defense_ranger_target = (
             HOME_DEFENSE_RANGERS + hunt_squads * HUNT_SQUAD_RANGERS
+        )
+        self.home_vanguard_count = (
+            HOME_DEFENSE_VANGUARDS + home_squads * HUNT_SQUAD_VANGUARDS
+        )
+        self.home_ranger_count = (
+            HOME_DEFENSE_RANGERS + home_squads * HUNT_SQUAD_RANGERS
         )
         max_worker_target = (
             max_fleet_units
@@ -2899,12 +2944,12 @@ class CoreFarmer:
 
         vanguard_strike_group = tuple(
             sorted(turn.vanguards, key=_uuid_sort_key)[
-                VANGUARD_CORE_GUARDS:self.defense_vanguard_target
+                self.home_vanguard_count:self.defense_vanguard_target
             ]
         )
         ranger_strike_group = tuple(
             sorted(turn.rangers, key=_uuid_sort_key)[
-                RANGER_CORE_GUARDS:self.defense_ranger_target
+                self.home_ranger_count:self.defense_ranger_target
             ]
         )
         visible_cores = {
@@ -4135,26 +4180,28 @@ class CoreFarmer:
                 {
                     unit.id
                     for unit in vanguards[
-                        VANGUARD_CORE_GUARDS:self.defense_vanguard_target
+                        self.home_vanguard_count:self.defense_vanguard_target
                     ]
                 },
                 {
                     unit.id
                     for unit in rangers[
-                        RANGER_CORE_GUARDS:self.defense_ranger_target
+                        self.home_ranger_count:self.defense_ranger_target
                     ]
                 },
             )
 
-        ranger_count = min(2, max(1, len(rangers) - 2))
-        ranger_strikers = rangers[-ranger_count:]
+        hunt_vanguards = vanguards[self.home_vanguard_count:]
+        hunt_rangers = rangers[self.home_ranger_count:]
+        ranger_count = min(2, max(1, len(hunt_rangers)))
+        ranger_strikers = hunt_rangers[-ranger_count:]
         remaining_damage = max(0, getattr(target, "hp", 1) - len(ranger_strikers))
         vanguard_count = min(
             max(0, remaining_damage),
-            max(1, len(vanguards) - 2),
+            max(1, len(hunt_vanguards)),
         )
         return (
-            {unit.id for unit in vanguards[-vanguard_count:]}
+            {unit.id for unit in hunt_vanguards[-vanguard_count:]}
             if vanguard_count
             else set(),
             {unit.id for unit in ranger_strikers},
@@ -4461,7 +4508,7 @@ class CoreFarmer:
             guard_radius = (
                 HUNT_PATROL_RADIUS
                 if self.raid_policy == "hunt"
-                and index >= VANGUARD_CORE_GUARDS
+                and index >= self.home_vanguard_count
                 else VANGUARD_GUARD_RADIUS
             )
             target_position = _guard_post(
@@ -4657,7 +4704,7 @@ class CoreFarmer:
             guard_radius = (
                 HUNT_PATROL_RADIUS
                 if self.raid_policy == "hunt"
-                and index >= RANGER_CORE_GUARDS
+                and index >= self.home_ranger_count
                 else RANGER_GUARD_RADIUS
             )
             target_position = _guard_post(
@@ -5432,6 +5479,7 @@ def _position_diagnostics(turn: Turn, tactic: CoreFarmer) -> str:
         f"resource_target={tactic.resource_target} "
         f"fleet_cap={tactic.max_fleet_units} "
         f"hunt_squads={tactic.hunt_squads} "
+        f"home_squads={tactic.home_squads} "
         f"raid_policy={tactic.raid_policy} "
         f"raid={int(tactic.raid_active)} "
         f"stockpile={int(tactic._stockpile_hit(turn))} "
@@ -5611,6 +5659,7 @@ def play(
     raid_policy: str = DEFAULT_RAID_POLICY,
     max_fleet_units: int = MAX_FLEET_UNITS,
     hunt_squads: int = 0,
+    home_squads: int = 1,
     beacon_policy: str,
     compatibility_marker: Path | None = DEFAULT_COMPATIBILITY_MARKER,
     heartbeat_file: Path | None = None,
@@ -5632,6 +5681,7 @@ def play(
         raid_policy=raid_policy,
         max_fleet_units=max_fleet_units,
         hunt_squads=hunt_squads,
+        home_squads=home_squads,
         beacon_policy=beacon_policy,
         compatibility_marker=compatibility_marker,
     )
@@ -5800,6 +5850,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--home-squads",
+        type=int,
+        default=1,
+        help=(
+            "How many hunt groups stay home to defend the Core; the rest "
+            "patrol and hunt (default 1)."
+        ),
+    )
+    parser.add_argument(
         "--beacon-policy",
         choices=("hold", "pursue", "retreat"),
         default=DEFAULT_BEACON_POLICY,
@@ -5876,6 +5935,7 @@ def main(argv: list[str] | None = None) -> int:
             raid_policy=args.raid_policy,
             max_fleet_units=args.max_fleet_units,
             hunt_squads=args.hunt_squads,
+            home_squads=args.home_squads,
             beacon_policy=args.beacon_policy,
             compatibility_marker=args.compatibility_marker,
             heartbeat_file=args.heartbeat_file,
