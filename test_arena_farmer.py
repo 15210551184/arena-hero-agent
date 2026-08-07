@@ -3171,7 +3171,10 @@ class CoreFarmerTests(unittest.TestCase):
     def test_raid_policy_requires_stockpile_target(self) -> None:
         with self.assertRaisesRegex(ValueError, "requires resource_target > 0"):
             CoreFarmer(raid_policy="stockpile", resource_target=0)
-        with self.assertRaisesRegex(ValueError, "must be 'off' or 'stockpile'"):
+        with self.assertRaisesRegex(
+            ValueError,
+            "must be 'off', 'stockpile', or 'hunt'",
+        ):
             CoreFarmer(raid_policy="aggressive")
 
     def test_max_fleet_units_validation(self) -> None:
@@ -3471,6 +3474,9 @@ class CoreFarmerTests(unittest.TestCase):
             self.assertEqual(tactic.worker_target, 1)
             self.assertEqual(tactic.max_fleet_units, 34)
 
+            store.apply({"raid_policy": "hunt"})
+            self.assertEqual(tactic.raid_policy, "hunt")
+
     @staticmethod
     def _raid_fleet() -> list[dict[str, object]]:
         workers = [
@@ -3611,6 +3617,40 @@ class CoreFarmerTests(unittest.TestCase):
         tactic.choose_actions(turn)
 
         self.assertEqual(turn.resource_space, 0)
+        self.assertTrue(tactic.raid_active)
+        self.assertEqual(tactic.isolated_core_target_id, UUID(ENEMY_1))
+
+    def test_hunt_mode_targets_visible_enemy_unit_without_confirmation(self) -> None:
+        turn = make_turn(
+            resources=20,
+            units=self._raid_fleet(),
+            enemies=[unit(ENEMY_1, "WORKER", (5, 0), controlled=False)],
+        )
+        tactic = CoreFarmer(
+            worker_target=15,
+            resource_target=0,
+            raid_policy="hunt",
+            beacon_policy="hold",
+        )
+        tactic.choose_actions(turn)
+
+        self.assertEqual(tactic.stationary_unit_target_id, UUID(ENEMY_1))
+        self.assertIsNone(tactic.isolated_core_target_id)
+
+    def test_hunt_mode_targets_nearest_core_without_bank(self) -> None:
+        turn = make_turn(
+            resources=20,
+            units=self._raid_fleet(),
+            enemies=[enemy_core(ENEMY_1, (3, 0))],
+        )
+        tactic = CoreFarmer(
+            worker_target=15,
+            resource_target=0,
+            raid_policy="hunt",
+            beacon_policy="hold",
+        )
+        tactic.choose_actions(turn)
+
         self.assertTrue(tactic.raid_active)
         self.assertEqual(tactic.isolated_core_target_id, UUID(ENEMY_1))
 
@@ -4594,6 +4634,10 @@ class EventLoopTests(unittest.TestCase):
         self.assertEqual(
             parser.parse_args(["--raid-policy", "stockpile"]).raid_policy,
             "stockpile",
+        )
+        self.assertEqual(
+            parser.parse_args(["--raid-policy", "hunt"]).raid_policy,
+            "hunt",
         )
 
     def test_max_fleet_units_cli_flag_parses(self) -> None:

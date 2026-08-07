@@ -49,6 +49,10 @@ All notable changes to this project will be documented in this file. The format 
 - New `--max-fleet-units` cap (19-150, default 34) with panel controls for
   worker target and fleet cap, enabling fleets up to 105 Units and the
   theoretical 525-resource maximum bank.
+- New `--raid-policy hunt`: always-on aggression where Worker scouts reveal
+  enemies and the spare Vanguards/Rangers patrol a wider ring and attack
+  visible enemy Cores and Units (Workers prioritized) without needing
+  stationary/unprotected confirmation.
 - Dashboard Units, Enemies, and Resources panels now scroll independently
   (max-height 220px) instead of stretching the whole sidebar.
 - New `--raid-policy stockpile` offense mode linked to `--resource-target`:

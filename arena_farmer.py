@@ -64,6 +64,9 @@ MAX_FLEET_UNITS_LIMIT = 150
 MAX_WORKER_TARGET = MAX_FLEET_UNITS - DEFENSE_VANGUARD_TARGET - DEFENSE_RANGER_TARGET
 VANGUARD_GUARD_RADIUS = 3
 RANGER_GUARD_RADIUS = 2
+HUNT_PATROL_RADIUS = 12
+HUNT_UNIT_RADIUS = 28
+HUNT_SIGHTING_TTL = 24
 VANGUARD_CORE_GUARDS = 1
 RANGER_CORE_GUARDS = 1
 ISOLATED_CORE_CONFIRM_TICKS = 2
@@ -1863,6 +1866,15 @@ def _unit_max_hp(unit_type: UnitType) -> int:
     return 4 if unit_type is UnitType.VANGUARD else 2
 
 
+def _hunt_unit_priority(enemy: object) -> int:
+    unit_type = getattr(enemy, "unit_type", None)
+    if unit_type is UnitType.WORKER:
+        return 0
+    if unit_type is UnitType.RANGER:
+        return 1
+    return 2
+
+
 class RuntimeConfig:
     """Mutable CoreFarmer tuning, persisted beside the dashboard memory."""
 
@@ -1913,8 +1925,10 @@ class RuntimeConfig:
             new_target = resource_target
         raid_policy = payload.get("raid_policy")
         if raid_policy is not None:
-            if raid_policy not in {"off", "stockpile"}:
-                raise ValueError("raid_policy must be 'off' or 'stockpile'")
+            if raid_policy not in {"off", "stockpile", "hunt"}:
+                raise ValueError(
+                    "raid_policy must be 'off', 'stockpile', or 'hunt'"
+                )
             new_policy = raid_policy
         worker_target = payload.get("worker_target")
         if worker_target is not None:
@@ -1990,8 +2004,8 @@ class CoreFarmer:
             )
         if not 0 <= resource_target <= 1_000_000:
             raise ValueError("resource_target must be between 0 and 1000000")
-        if raid_policy not in {"off", "stockpile"}:
-            raise ValueError("raid_policy must be 'off' or 'stockpile'")
+        if raid_policy not in {"off", "stockpile", "hunt"}:
+            raise ValueError("raid_policy must be 'off', 'stockpile', or 'hunt'")
         if raid_policy == "stockpile" and resource_target <= 0:
             raise ValueError(
                 "raid_policy 'stockpile' requires resource_target > 0"
@@ -2092,9 +2106,13 @@ class CoreFarmer:
         return self.resource_target > 0 and turn.resources >= self.resource_target
 
     def _raid_mode_armed(self) -> bool:
+        if self.raid_policy == "hunt":
+            return True
         return self.raid_policy == "stockpile" and self.resource_target > 0
 
     def _raid_triggered(self, turn: Turn) -> bool:
+        if self.raid_policy == "hunt":
+            return True
         return self._raid_mode_armed() and self._stockpile_hit(turn)
 
     def _spending_holds(self, turn: Turn) -> bool:
@@ -3092,6 +3110,41 @@ class CoreFarmer:
         self.stationary_unit_target_id = target.id
         return target
 
+    def _select_hunt_unit_target(
+        self,
+        turn: Turn,
+    ) -> object | None:
+        """Pick the best visible enemy Unit to hunt (Worker first, then Ranged)."""
+        self.stationary_unit_target_id = None
+        core = turn.core
+        if (
+            core is None
+            or self.recovery_mode
+            or core.hp < 5
+            or len(turn.vanguards) < STATIC_WORKER_CLEAR_VANGUARDS
+            or len(turn.rangers) < STATIC_WORKER_CLEAR_RANGERS
+        ):
+            return None
+        candidates: list[tuple[object, ...]] = []
+        for enemy in turn.visible_enemies:
+            if getattr(enemy, "kind") == "CORE":
+                continue
+            if _distance(core.position, enemy.position) > HUNT_UNIT_RADIUS:
+                continue
+            candidates.append(
+                (
+                    _hunt_unit_priority(enemy),
+                    _distance(core.position, enemy.position),
+                    _uuid_sort_key(enemy),
+                    enemy,
+                )
+            )
+        if not candidates:
+            return None
+        target = min(candidates)[3]
+        self.stationary_unit_target_id = target.id
+        return target
+
     def _enter_recovery(self, tick: int, reason: str) -> None:
         self.recovery_until_tick = max(
             self.recovery_until_tick,
@@ -3662,11 +3715,14 @@ class CoreFarmer:
             and not self.combat_pressure_active
             and isolated_core_target is None
         ):
-            stationary_candidates = self._stationary_enemy_units(turn)
-            stationary_unit_target = self._select_stationary_unit_target(
-                turn,
-                stationary_candidates,
-            )
+            if self.raid_policy == "hunt":
+                stationary_unit_target = self._select_hunt_unit_target(turn)
+            else:
+                stationary_candidates = self._stationary_enemy_units(turn)
+                stationary_unit_target = self._select_stationary_unit_target(
+                    turn,
+                    stationary_candidates,
+                )
         combat_target = isolated_core_target or stationary_unit_target
         observer_position = self._core_observer_position(
             turn,
@@ -4345,6 +4401,12 @@ class CoreFarmer:
                 vanguard.wait()
                 continue
 
+            guard_radius = (
+                HUNT_PATROL_RADIUS
+                if self.raid_policy == "hunt"
+                and index >= VANGUARD_CORE_GUARDS
+                else VANGUARD_GUARD_RADIUS
+            )
             target_position = _guard_post(
                 vanguard,
                 core.position,
@@ -4358,7 +4420,7 @@ class CoreFarmer:
                     ),
                     index,
                 ),
-                VANGUARD_GUARD_RADIUS,
+                guard_radius,
             )
             if target_position != vanguard.position:
                 moved = _queue_toward(
@@ -4535,6 +4597,12 @@ class CoreFarmer:
                 ranger.wait()
                 continue
 
+            guard_radius = (
+                HUNT_PATROL_RADIUS
+                if self.raid_policy == "hunt"
+                and index >= RANGER_CORE_GUARDS
+                else RANGER_GUARD_RADIUS
+            )
             target_position = _guard_post(
                 ranger,
                 core.position,
@@ -4548,7 +4616,7 @@ class CoreFarmer:
                     ),
                     index,
                 ),
-                RANGER_GUARD_RADIUS,
+                guard_radius,
             )
             if target_position != ranger.position:
                 moved = _queue_toward(
@@ -5639,12 +5707,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--raid-policy",
-        choices=("off", "stockpile"),
+        choices=("off", "stockpile", "hunt"),
         default=DEFAULT_RAID_POLICY,
         help=(
             "'stockpile' raids the nearest enemy Core once resources reach "
-            "--resource-target, then returns to stockpiling; 'off' keeps the "
-            "conservative confirmed-stationary raid behavior."
+            "--resource-target, then returns to stockpiling; 'hunt' keeps the "
+            "spare Vanguards/Rangers patrolling and attacking visible enemy "
+            "Cores and Units; 'off' keeps the conservative confirmed-stationary "
+            "raid behavior."
         ),
     )
     parser.add_argument(

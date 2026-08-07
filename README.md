@@ -225,9 +225,16 @@ it behind a firewall or reverse-proxy auth.
 `--raid-policy stockpile` links the bank to offense: once resources reach
 `--resource-target`, the Agent selects the nearest visible or remembered enemy
 Core and sends the spare Vanguards/Rangers to destroy it, then returns to
-stockpiling until the target is reached again. `off` keeps the conservative
+stockpiling until the target is reached again.
+
+`--raid-policy hunt` is always-on aggression: Workers keep scouting while the
+spare Vanguards/Rangers patrol a wider ring around the Core and attack visible
+enemy Cores (first) and enemy Workers/Vanguards/Rangers on sight, without
+requiring the stationary/unprotected confirmation. The Core guard unit stays
+home and strikes recall under combat pressure. `off` keeps the conservative
 confirmed-stationary raid behavior. In Docker Compose set
-`ARENA_RAID_POLICY=stockpile`; the systemd path reads it from
+`ARENA_RAID_POLICY=stockpile` or `ARENA_RAID_POLICY=hunt`; the systemd path
+reads it from
 `deploy/arena-hero-runtime.env`.
 
 See [configuration](docs/configuration.md), [deployment](docs/deployment.md), and [strategy](docs/strategy.md) for the complete operational contract.

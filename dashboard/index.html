@@ -368,10 +368,11 @@ tbody tr.clickable { cursor: pointer; }
     <div class="config-row"><span class="config-label">工人目标</span><input type="number" id="cfg-workers" min="1" max="200" inputmode="numeric"></div>
     <div class="config-row"><span class="config-label">舰队上限</span><input type="number" id="cfg-fleet" min="19" max="150" inputmode="numeric"></div>
     <div class="config-row"><span class="config-label">囤积目标</span><input type="number" id="cfg-target" min="0" max="1000000" step="10" inputmode="numeric"></div>
-    <div class="config-row"><span class="config-label">突袭策略</span><span class="config-raid" id="cfg-raid">
-      <button type="button" class="pill-btn" data-raid="off">关闭</button>
-      <button type="button" class="pill-btn" data-raid="stockpile">达标突袭</button>
-    </span></div>
+        <div class="config-row"><span class="config-label">突袭策略</span><span class="config-raid" id="cfg-raid">
+          <button type="button" class="pill-btn" data-raid="off">关闭</button>
+          <button type="button" class="pill-btn" data-raid="stockpile">达标突袭</button>
+          <button type="button" class="pill-btn" data-raid="hunt">巡逻猎杀</button>
+        </span></div>
     <div class="config-row"><button type="button" id="cfg-save" class="ctl-btn">保存设置</button><span id="cfg-msg" class="config-msg"></span></div>
   </div>
 </div>
@@ -854,7 +855,9 @@ function renderConfig() {
   if (target && document.activeElement !== target) {
     target.value = t.resource_target ?? 0;
   }
-  cfgRaid = t.raid_policy === "stockpile" ? "stockpile" : "off";
+  cfgRaid = ["off", "stockpile", "hunt"].includes(t.raid_policy)
+    ? t.raid_policy
+    : "off";
   document.querySelectorAll("#cfg-raid .pill-btn").forEach(b => {
     b.classList.toggle("is-active", b.dataset.raid === cfgRaid);
   });
