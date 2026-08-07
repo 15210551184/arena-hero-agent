@@ -36,6 +36,8 @@ All notable changes to this project will be documented in this file. The format 
   on the Core cell always leaves through the reserved delivery lane, using a
   legal second cell slot when the ring is occupied, so returning Workers can
   no longer deadlock around the Core.
+- Dashboard Units, Enemies, and Resources panels now scroll independently
+  (max-height 220px) instead of stretching the whole sidebar.
 - Hierarchical lifecycle and threat assessment with explicit posture/reason diagnostics for alerts, pre-evasion, engagement, multi-axis breakout, recovery, and compatibility hold.
 
 ### Changed
