@@ -217,7 +217,6 @@ canvas.dragging { cursor: grabbing; }
 }
 .panel h2 .cnt { background: rgba(34, 211, 238, 0.12); color: var(--accent); border-radius: 999px;
   padding: 0 7px; font-size: 10px; font-weight: 600; }
-.panel h2 .pill-btn { font-size: 10px; padding: 1px 8px; margin-left: auto; }
 .config-row { display: flex; align-items: center; gap: 6px; margin: 6px 0; font-size: 12px; }
 .config-label { color: var(--muted); width: 56px; flex: none; }
 .config-body { padding: 2px; }
@@ -225,8 +224,6 @@ canvas.dragging { cursor: grabbing; }
   color: var(--fg); border-radius: 8px; padding: 4px 8px; font-size: 12px; }
 .config-raid { display: inline-flex; gap: 4px; flex-wrap: wrap; }
 .config-msg { font-size: 12px; }
-.unit-group { margin-bottom: 6px; }
-.unit-group-title { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); margin: 4px 0 2px; }
 .scroll { overflow: auto; max-height: 220px; margin: 0 -4px; padding: 0 4px; }
 .scroll::-webkit-scrollbar { width: 5px; }
 .scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
@@ -427,7 +424,7 @@ tbody tr.clickable { cursor: pointer; }
     </div>
     <div class="side-scroll">
       <section class="panel" id="plan-panel"><h2>本帧指令队列 <span class="cnt" id="plan-count">0</span></h2><div class="plan-list" id="plan-list"><div class="empty">—</div></div></section>
-      <section class="panel" id="units-panel"><h2>单位 <span class="cnt" id="units-count">0</span><button type="button" id="units-group-btn" class="pill-btn">分组</button></h2><div class="scroll" id="units-body"></div></section>
+      <section class="panel" id="units-panel"><h2>单位 <span class="cnt" id="units-count">0</span></h2><div class="pills" id="units-pills"></div><div class="scroll" id="units-body"></div></section>
       <section class="panel" id="enemies-panel"><h2>敌方与威胁 <span class="cnt" id="enemies-count">0</span></h2><div class="scroll" id="enemies-body"></div></section>
       <section class="panel" id="resources-panel"><h2>资源 <span class="cnt" id="resources-count">0</span></h2><div class="scroll" id="resources-body"></div></section>
       <section class="panel" id="history-panel"><h2>系统动态 <span class="cnt" id="history-count">0</span></h2><div class="log-stream" id="history-body"></div></section>
@@ -451,7 +448,7 @@ let dragging = null;
 let lastNewAt = 0;
 let lastNewLabel = "";
 let logFilter = "";
-let unitsGrouped = false;
+let unitsFilter = "";
 let cfgRaid = "off";
 
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -907,34 +904,37 @@ function tableRows(headers, rows) {
 
 function renderUnits() {
   const all = [...(data.units || [])];
+  const counts = { WORKER: 0, VANGUARD: 0, RANGER: 0 };
+  for (const u of all) {
+    if (counts[u.unit_type] !== undefined) counts[u.unit_type] += 1;
+  }
+  const pills = document.getElementById("units-pills");
+  if (pills) {
+    pills.innerHTML = [
+      ["", `全部(${all.length})`],
+      ["WORKER", `工人(${counts.WORKER})`],
+      ["VANGUARD", `先锋(${counts.VANGUARD})`],
+      ["RANGER", `游侠(${counts.RANGER})`],
+    ].map(([type, label]) =>
+      `<button type="button" class="pill-btn ${unitsFilter === type ? "is-active" : ""}" data-unit-type="${type}">${label}</button>`
+    ).join("");
+  }
+  const visible = unitsFilter
+    ? all.filter(u => u.unit_type === unitsFilter)
+    : all;
+  document.getElementById("units-count").textContent = visible.length;
   const unitRow = u => `<tr class="clickable" data-unit-id="${u.id}">
     <td><span class="tag friend">${zh(u.unit_type, UNIT_ZH)}</span></td>
     <td>${u.id.slice(0, 8)}</td><td>(${u.position})</td><td>${u.hp}</td><td>${u.cargo || 0}</td>
     <td>${roleOf(u.id)}</td></tr>`;
-  const btn = document.getElementById("units-group-btn");
-  if (btn) {
-    btn.textContent = unitsGrouped ? "平铺" : "分组";
-    btn.classList.toggle("is-active", unitsGrouped);
-  }
   const byPos = (a, b) =>
     (a.position[0] - b.position[0]) ||
     (a.position[1] - b.position[1]) ||
     a.id.localeCompare(b.id);
-  if (unitsGrouped) {
-    const order = ["WORKER", "VANGUARD", "RANGER"];
-    const headers = ["类型", "ID", "位置", "HP", "货", "职责"];
-    const html = order.map(type => {
-      const list = all.filter(u => u.unit_type === type).sort(byPos);
-      if (!list.length) return "";
-      return `<div class="unit-group"><div class="unit-group-title"><span class="tag friend">${zh(type, UNIT_ZH)}</span><span class="cnt">${list.length}</span></div>${tableRows(headers, list.map(unitRow))}</div>`;
-    }).join("");
-    document.getElementById("units-body").innerHTML = html || '<div class="empty">无单位</div>';
-  } else {
-    document.getElementById("units-body").innerHTML = tableRows(
-      ["类型", "ID", "位置", "HP", "货", "职责"],
-      all.map(unitRow),
-    );
-  }
+  document.getElementById("units-body").innerHTML = tableRows(
+    ["类型", "ID", "位置", "HP", "货", "职责"],
+    [...visible].sort(byPos).map(unitRow),
+  );
 }
 
 document.getElementById("units-body").addEventListener("click", e => {
@@ -942,8 +942,10 @@ document.getElementById("units-body").addEventListener("click", e => {
   if (row) focusUnit(row.dataset.unitId);
 });
 
-document.getElementById("units-group-btn").addEventListener("click", () => {
-  unitsGrouped = !unitsGrouped;
+document.getElementById("units-pills").addEventListener("click", e => {
+  const btn = e.target.closest(".pill-btn");
+  if (!btn) return;
+  unitsFilter = btn.dataset.unitType || "";
   renderUnits();
 });
 

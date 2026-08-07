@@ -51,8 +51,8 @@ All notable changes to this project will be documented in this file. The format 
   beside the dashboard memory, so no `.env` edit or rebuild is needed.
 - The "运行设置" controls moved to a header button with a popup dialog (like
   "手动探测") instead of an inline sidebar panel.
-- Dashboard Units panel gains a 分组/平铺 toggle that groups units by type
-  (工人/先锋/游侠) with per-group counts.
+- Dashboard Units panel gains type filter pills: 全部(总数) / 工人 / 先锋 /
+  游侠 with per-type counts; clicking a pill filters the unit list.
 - Hierarchical lifecycle and threat assessment with explicit posture/reason diagnostics for alerts, pre-evasion, engagement, multi-axis breakout, recovery, and compatibility hold.
 
 ### Changed
