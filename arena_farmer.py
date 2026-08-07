@@ -60,6 +60,7 @@ EARLY_DEFENSE_RANGER_TARGET = 1
 DEFENSE_VANGUARD_TARGET = 3
 DEFENSE_RANGER_TARGET = 4
 MAX_FLEET_UNITS = 34
+MAX_FLEET_UNITS_LIMIT = 150
 MAX_WORKER_TARGET = MAX_FLEET_UNITS - DEFENSE_VANGUARD_TARGET - DEFENSE_RANGER_TARGET
 VANGUARD_GUARD_RADIUS = 3
 RANGER_GUARD_RADIUS = 2
@@ -652,6 +653,7 @@ def build_snapshot(
         "tactic": {
             "strategy_phase": tactic.strategy_phase(turn),
             "worker_target": tactic.worker_target,
+            "max_fleet_units": tactic.max_fleet_units,
             "resource_target": tactic.resource_target,
             "raid_policy": tactic.raid_policy,
             "raid_active": tactic.raid_active,
@@ -1884,6 +1886,8 @@ class RuntimeConfig:
         return {
             "resource_target": self._tactic.resource_target,
             "raid_policy": self._tactic.raid_policy,
+            "worker_target": self._tactic.worker_target,
+            "max_fleet_units": self._tactic.max_fleet_units,
         }
 
     def apply(
@@ -1894,6 +1898,8 @@ class RuntimeConfig:
     ) -> dict[str, object]:
         new_target = self._tactic.resource_target
         new_policy = self._tactic.raid_policy
+        new_worker_target = self._tactic.worker_target
+        new_max_fleet = self._tactic.max_fleet_units
         resource_target = payload.get("resource_target")
         if resource_target is not None:
             if (
@@ -1910,12 +1916,44 @@ class RuntimeConfig:
             if raid_policy not in {"off", "stockpile"}:
                 raise ValueError("raid_policy must be 'off' or 'stockpile'")
             new_policy = raid_policy
+        worker_target = payload.get("worker_target")
+        if worker_target is not None:
+            if (
+                not isinstance(worker_target, int)
+                or isinstance(worker_target, bool)
+                or not 1 <= worker_target <= 200
+            ):
+                raise ValueError(
+                    "worker_target must be an integer between 1 and 200"
+                )
+            new_worker_target = worker_target
+        max_fleet_units = payload.get("max_fleet_units")
+        if max_fleet_units is not None:
+            if (
+                not isinstance(max_fleet_units, int)
+                or isinstance(max_fleet_units, bool)
+                or not 19 <= max_fleet_units <= MAX_FLEET_UNITS_LIMIT
+            ):
+                raise ValueError(
+                    "max_fleet_units must be an integer between 19 and "
+                    f"{MAX_FLEET_UNITS_LIMIT}"
+                )
+            new_max_fleet = max_fleet_units
+        max_worker_target = (
+            new_max_fleet - DEFENSE_VANGUARD_TARGET - DEFENSE_RANGER_TARGET
+        )
+        if not 1 <= new_worker_target <= max_worker_target:
+            raise ValueError(
+                f"worker_target must be between 1 and {max_worker_target}"
+            )
         if new_policy == "stockpile" and new_target <= 0:
             raise ValueError(
                 "raid_policy 'stockpile' requires resource_target > 0"
             )
         self._tactic.resource_target = new_target
         self._tactic.raid_policy = new_policy
+        self._tactic.worker_target = new_worker_target
+        self._tactic.max_fleet_units = new_max_fleet
         if persist:
             self._save()
         return self.snapshot()
@@ -1935,12 +1973,20 @@ class CoreFarmer:
         worker_target: int = DEFAULT_WORKER_TARGET,
         resource_target: int = DEFAULT_RESOURCE_TARGET,
         raid_policy: str = DEFAULT_RAID_POLICY,
+        max_fleet_units: int = MAX_FLEET_UNITS,
         beacon_policy: str = DEFAULT_BEACON_POLICY,
         compatibility_marker: Path | None = DEFAULT_COMPATIBILITY_MARKER,
     ) -> None:
-        if not 1 <= worker_target <= MAX_WORKER_TARGET:
+        if not 19 <= max_fleet_units <= MAX_FLEET_UNITS_LIMIT:
             raise ValueError(
-                f"worker_target must be between 1 and {MAX_WORKER_TARGET}"
+                f"max_fleet_units must be between 19 and {MAX_FLEET_UNITS_LIMIT}"
+            )
+        max_worker_target = (
+            max_fleet_units - DEFENSE_VANGUARD_TARGET - DEFENSE_RANGER_TARGET
+        )
+        if not 1 <= worker_target <= max_worker_target:
+            raise ValueError(
+                f"worker_target must be between 1 and {max_worker_target}"
             )
         if not 0 <= resource_target <= 1_000_000:
             raise ValueError("resource_target must be between 0 and 1000000")
@@ -1955,6 +2001,7 @@ class CoreFarmer:
         self.worker_target = worker_target
         self.resource_target = resource_target
         self.raid_policy = raid_policy
+        self.max_fleet_units = max_fleet_units
         self.beacon_policy = beacon_policy
         self.compatibility_marker = compatibility_marker
         self.compatibility_hold = False
@@ -4758,7 +4805,7 @@ class CoreFarmer:
             not self.compatibility_hold
             and
             context.friendly_counts[core.position] < 2
-            and len(turn.units) < MAX_FLEET_UNITS
+            and len(turn.units) < self.max_fleet_units
             and not self._spending_holds(turn)
         )
         nearest_threat = min(
@@ -5255,6 +5302,7 @@ def _position_diagnostics(turn: Turn, tactic: CoreFarmer) -> str:
         f"delivery_blocked={delivery_blocked} "
         f"resource_blocked={resource_blocked} "
         f"resource_target={tactic.resource_target} "
+        f"fleet_cap={tactic.max_fleet_units} "
         f"raid_policy={tactic.raid_policy} "
         f"raid={int(tactic.raid_active)} "
         f"stockpile={int(tactic._stockpile_hit(turn))} "
@@ -5432,6 +5480,7 @@ def play(
     worker_target: int,
     resource_target: int = DEFAULT_RESOURCE_TARGET,
     raid_policy: str = DEFAULT_RAID_POLICY,
+    max_fleet_units: int = MAX_FLEET_UNITS,
     beacon_policy: str,
     compatibility_marker: Path | None = DEFAULT_COMPATIBILITY_MARKER,
     heartbeat_file: Path | None = None,
@@ -5451,6 +5500,7 @@ def play(
         worker_target=worker_target,
         resource_target=resource_target,
         raid_policy=raid_policy,
+        max_fleet_units=max_fleet_units,
         beacon_policy=beacon_policy,
         compatibility_marker=compatibility_marker,
     )
@@ -5598,6 +5648,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--max-fleet-units",
+        type=int,
+        default=MAX_FLEET_UNITS,
+        help=(
+            "Hard cap on total controlled Units (19-150, default 34). "
+            "Storage is population x 5, so a cap of 105 allows the maximum "
+            "525-resource bank."
+        ),
+    )
+    parser.add_argument(
         "--beacon-policy",
         choices=("hold", "pursue", "retreat"),
         default=DEFAULT_BEACON_POLICY,
@@ -5672,6 +5732,7 @@ def main(argv: list[str] | None = None) -> int:
             worker_target=args.worker_target,
             resource_target=args.resource_target,
             raid_policy=args.raid_policy,
+            max_fleet_units=args.max_fleet_units,
             beacon_policy=args.beacon_policy,
             compatibility_marker=args.compatibility_marker,
             heartbeat_file=args.heartbeat_file,

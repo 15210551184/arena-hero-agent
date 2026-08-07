@@ -37,6 +37,8 @@ services:
       - arena-hero-agent
       - --worker-target
       - "${ARENA_WORKER_TARGET:-12}"
+      - --max-fleet-units
+      - "${ARENA_MAX_FLEET_UNITS:-34}"
       - --resource-target
       - "${ARENA_RESOURCE_TARGET:-120}"
       - --raid-policy

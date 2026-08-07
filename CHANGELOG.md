@@ -46,6 +46,9 @@ All notable changes to this project will be documented in this file. The format 
 - Fixed stockpile raid never firing when the bank target fills Core capacity:
   the `resource_space >= 10` gate no longer applies in `raid-policy stockpile`
   mode, so reaching the target at full storage still sends the strike group.
+- New `--max-fleet-units` cap (19-150, default 34) with panel controls for
+  worker target and fleet cap, enabling fleets up to 105 Units and the
+  theoretical 525-resource maximum bank.
 - Dashboard Units, Enemies, and Resources panels now scroll independently
   (max-height 220px) instead of stretching the whole sidebar.
 - New `--raid-policy stockpile` offense mode linked to `--resource-target`:

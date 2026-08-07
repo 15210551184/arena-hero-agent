@@ -365,6 +365,8 @@ tbody tr.clickable { cursor: pointer; }
 <div class="probe-panel" id="config-panel" hidden>
   <div class="probe-head">运行设置 <button type="button" id="config-close" aria-label="关闭">×</button></div>
   <div class="config-body">
+    <div class="config-row"><span class="config-label">工人目标</span><input type="number" id="cfg-workers" min="1" max="200" inputmode="numeric"></div>
+    <div class="config-row"><span class="config-label">舰队上限</span><input type="number" id="cfg-fleet" min="19" max="150" inputmode="numeric"></div>
     <div class="config-row"><span class="config-label">囤积目标</span><input type="number" id="cfg-target" min="0" max="1000000" step="10" inputmode="numeric"></div>
     <div class="config-row"><span class="config-label">突袭策略</span><span class="config-raid" id="cfg-raid">
       <button type="button" class="pill-btn" data-raid="off">关闭</button>
@@ -840,6 +842,14 @@ function renderCore() {
 
 function renderConfig() {
   const t = data.tactic || {};
+  const workers = document.getElementById("cfg-workers");
+  if (workers && document.activeElement !== workers) {
+    workers.value = t.worker_target ?? 12;
+  }
+  const fleet = document.getElementById("cfg-fleet");
+  if (fleet && document.activeElement !== fleet) {
+    fleet.value = t.max_fleet_units ?? 34;
+  }
   const target = document.getElementById("cfg-target");
   if (target && document.activeElement !== target) {
     target.value = t.resource_target ?? 0;
@@ -971,11 +981,25 @@ document.getElementById("cfg-save").addEventListener("click", async () => {
     msg.style.color = "var(--threat)";
     return;
   }
+  const workersEl = document.getElementById("cfg-workers");
+  const fleetEl = document.getElementById("cfg-fleet");
+  const workerValue = parseInt(workersEl.value, 10);
+  const fleetValue = parseInt(fleetEl.value, 10);
+  if (!Number.isInteger(workerValue) || !Number.isInteger(fleetValue)) {
+    msg.textContent = "工人目标/舰队上限必须是整数";
+    msg.style.color = "var(--threat)";
+    return;
+  }
   try {
     const r = await fetch("/api/config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ resource_target: value, raid_policy: cfgRaid }),
+      body: JSON.stringify({
+        resource_target: value,
+        raid_policy: cfgRaid,
+        worker_target: workerValue,
+        max_fleet_units: fleetValue,
+      }),
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || ("http " + r.status));

@@ -186,7 +186,8 @@ Common Agent options:
 
 ```text
 --worker-target 12
---resource-target 0
+--max-fleet-units 34
+--resource-target 120
 --raid-policy off
 --beacon-policy retreat
 --base-url https://api.arenahero.io
@@ -198,6 +199,13 @@ Common Agent options:
 the official `unit_cost()` helper, so production above 20 units correctly
 applies the dynamic v0.14 price tiers.
 
+`--max-fleet-units` sets the hard cap on total controlled Units (19-150,
+default 34). Storage is `population × 5`, so the theoretical maximum bank is
+525 resources at 105 Units (the next Unit is unaffordable beyond that due to
+dynamic pricing). To max out, use `--max-fleet-units 105 --worker-target 98
+--resource-target 520`; in Docker Compose set `ARENA_MAX_FLEET_UNITS` in your
+environment.
+
 `--resource-target N` enables stockpile mode (default `120`): once Core
 resources reach `N`, the Agent stops discretionary production and shield repair
 and banks income (emergency healing and retreat still run). Core storage is
@@ -206,10 +214,11 @@ least 30 units (for example `ARENA_WORKER_TARGET=26` plus the normal defense
 fleet). In Docker Compose set `ARENA_RESOURCE_TARGET` in your environment; the
 systemd path reads it from `deploy/arena-hero-runtime.env`.
 
-The dashboard "运行设置" panel can change the stockpile target and raid policy
-at runtime without touching `.env`: changes are applied live and persisted to
-`runtime-config.json` beside the dashboard memory file (Docker Compose keeps it
-in the `/data` volume, so it survives rebuilds). If the dashboard port is
+The dashboard "运行设置" panel can change the worker target, fleet cap,
+stockpile target and raid policy at runtime without touching `.env`: changes
+are applied live and persisted to `runtime-config.json` beside the dashboard
+memory file (Docker Compose keeps it in the `/data` volume, so it survives
+rebuilds). If the dashboard port is
 reachable from the public internet, anyone can change these settings, so keep
 it behind a firewall or reverse-proxy auth.
 

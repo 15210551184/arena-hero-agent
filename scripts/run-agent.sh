@@ -6,6 +6,7 @@ PROJECT_ROOT=$(dirname "$SCRIPT_DIR")
 AGENT="$PROJECT_ROOT/.venv/bin/arena-hero-agent"
 ENV_FILE=${ARENA_HERO_ENV_FILE:-$PROJECT_ROOT/.env}
 WORKER_TARGET=${ARENA_WORKER_TARGET:-12}
+MAX_FLEET_UNITS=${ARENA_MAX_FLEET_UNITS:-34}
 RESOURCE_TARGET=${ARENA_RESOURCE_TARGET:-120}
 RAID_POLICY=${ARENA_RAID_POLICY:-off}
 BEACON_POLICY=${ARENA_BEACON_POLICY:-retreat}
@@ -20,6 +21,7 @@ while :; do
     "$AGENT" \
         --env-file "$ENV_FILE" \
         --worker-target "$WORKER_TARGET" \
+        --max-fleet-units "$MAX_FLEET_UNITS" \
         --resource-target "$RESOURCE_TARGET" \
         --raid-policy "$RAID_POLICY" \
         --beacon-policy "$BEACON_POLICY" \
