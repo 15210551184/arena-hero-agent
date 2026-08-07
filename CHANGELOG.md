@@ -46,6 +46,8 @@ All notable changes to this project will be documented in this file. The format 
 - Dashboard "运行设置" panel: stockpile target (default now `120`) and raid
   policy can be changed live from the page and persist to `runtime-config.json`
   beside the dashboard memory, so no `.env` edit or rebuild is needed.
+- The "运行设置" controls moved to a header button with a popup dialog (like
+  "手动探测") instead of an inline sidebar panel.
 - Dashboard Units panel gains a 分组/平铺 toggle that groups units by type
   (工人/先锋/游侠) with per-group counts.
 - Hierarchical lifecycle and threat assessment with explicit posture/reason diagnostics for alerts, pre-evasion, engagement, multi-axis breakout, recovery, and compatibility hold.

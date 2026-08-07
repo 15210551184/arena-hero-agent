@@ -220,6 +220,7 @@ canvas.dragging { cursor: grabbing; }
 .panel h2 .pill-btn { font-size: 10px; padding: 1px 8px; margin-left: auto; }
 .config-row { display: flex; align-items: center; gap: 6px; margin: 6px 0; font-size: 12px; }
 .config-label { color: var(--muted); width: 56px; flex: none; }
+.config-body { padding: 2px; }
 .config-row input[type="number"] { width: 96px; background: var(--card2); border: 1px solid var(--border);
   color: var(--fg); border-radius: 8px; padding: 4px 8px; font-size: 12px; }
 .config-raid { display: inline-flex; gap: 4px; flex-wrap: wrap; }
@@ -351,6 +352,7 @@ tbody tr.clickable { cursor: pointer; }
   </div>
   <div class="hud" id="hud"></div>
   <div class="top-controls">
+    <button type="button" id="config-btn" class="ctl-btn">运行设置</button>
     <button type="button" id="probe-btn" class="ctl-btn">手动探测</button>
     <span class="ctl">TICK <b id="tick" class="mono">—</b></span>
     <span class="ctl mono" id="updated">等待数据…</span>
@@ -361,6 +363,18 @@ tbody tr.clickable { cursor: pointer; }
 <div class="probe-panel" id="probe-panel" hidden>
   <div class="probe-head">手动探测 <button type="button" id="probe-close" aria-label="关闭">×</button></div>
   <div id="probe-body"></div>
+</div>
+
+<div class="probe-panel" id="config-panel" hidden>
+  <div class="probe-head">运行设置 <button type="button" id="config-close" aria-label="关闭">×</button></div>
+  <div class="config-body">
+    <div class="config-row"><span class="config-label">囤积目标</span><input type="number" id="cfg-target" min="0" max="1000000" step="10" inputmode="numeric"></div>
+    <div class="config-row"><span class="config-label">突袭策略</span><span class="config-raid" id="cfg-raid">
+      <button type="button" class="pill-btn" data-raid="off">关闭</button>
+      <button type="button" class="pill-btn" data-raid="stockpile">达标突袭</button>
+    </span></div>
+    <div class="config-row"><button type="button" id="cfg-save" class="ctl-btn">保存设置</button><span id="cfg-msg" class="config-msg"></span></div>
+  </div>
 </div>
 
 <main class="workspace">
@@ -412,14 +426,6 @@ tbody tr.clickable { cursor: pointer; }
       <div class="core-meta mono" id="core-meta">—</div>
     </div>
     <div class="side-scroll">
-      <section class="panel" id="config-panel"><h2>运行设置</h2>
-        <div class="config-row"><span class="config-label">囤积目标</span><input type="number" id="cfg-target" min="0" max="1000000" step="10" inputmode="numeric"></div>
-        <div class="config-row"><span class="config-label">突袭策略</span><span class="config-raid" id="cfg-raid">
-          <button type="button" class="pill-btn" data-raid="off">关闭</button>
-          <button type="button" class="pill-btn" data-raid="stockpile">达标突袭</button>
-        </span></div>
-        <div class="config-row"><button type="button" id="cfg-save" class="ctl-btn">保存设置</button><span id="cfg-msg" class="config-msg"></span></div>
-      </section>
       <section class="panel" id="plan-panel"><h2>本帧指令队列 <span class="cnt" id="plan-count">0</span></h2><div class="plan-list" id="plan-list"><div class="empty">—</div></div></section>
       <section class="panel" id="units-panel"><h2>单位 <span class="cnt" id="units-count">0</span><button type="button" id="units-group-btn" class="pill-btn">分组</button></h2><div class="scroll" id="units-body"></div></section>
       <section class="panel" id="enemies-panel"><h2>敌方与威胁 <span class="cnt" id="enemies-count">0</span></h2><div class="scroll" id="enemies-body"></div></section>
@@ -1519,6 +1525,14 @@ document.getElementById("probe-btn").addEventListener("click", async () => {
 });
 document.getElementById("probe-close").addEventListener("click", () => {
   document.getElementById("probe-panel").hidden = true;
+});
+
+document.getElementById("config-btn").addEventListener("click", () => {
+  renderConfig();
+  document.getElementById("config-panel").hidden = false;
+});
+document.getElementById("config-close").addEventListener("click", () => {
+  document.getElementById("config-panel").hidden = true;
 });
 
 function renderProbe(d) {
