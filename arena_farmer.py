@@ -2758,7 +2758,10 @@ class CoreFarmer:
         if turn.resources < ISOLATED_CORE_MIN_RESOURCES:
             self._release_core_raid()
             return None
-        if turn.resource_space < ISOLATED_CORE_MIN_RESOURCE_SPACE:
+        if (
+            turn.resource_space < ISOLATED_CORE_MIN_RESOURCE_SPACE
+            and not raid_mode
+        ):
             self._release_core_raid()
             return None
         if (

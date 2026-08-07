@@ -43,6 +43,9 @@ All notable changes to this project will be documented in this file. The format 
   while the current depositor is on the Core, and the next Worker enters the
   Core cell in the same Tick the depositor moves out (legal same-Tick swap), so
   the Core cell is never left idle between deposits.
+- Fixed stockpile raid never firing when the bank target fills Core capacity:
+  the `resource_space >= 10` gate no longer applies in `raid-policy stockpile`
+  mode, so reaching the target at full storage still sends the strike group.
 - Dashboard Units, Enemies, and Resources panels now scroll independently
   (max-height 220px) instead of stretching the whole sidebar.
 - New `--raid-policy stockpile` offense mode linked to `--resource-target`:

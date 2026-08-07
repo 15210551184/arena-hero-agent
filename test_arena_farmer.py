@@ -3537,6 +3537,57 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertFalse(tactic.raid_active)
         self.assertIsNone(tactic.isolated_core_target_id)
 
+    def test_raid_mode_fires_when_stockpile_target_fills_capacity(self) -> None:
+        workers = [
+            unit(
+                f"20000000-0000-4000-8000-{index:012x}",
+                "WORKER",
+                (20 + index, 20),
+                cargo=0,
+            )
+            for index in range(17)
+        ]
+        vanguards = [
+            unit(VANGUARD_1, "VANGUARD", (1, 0)),
+            unit(VANGUARD_2, "VANGUARD", (0, 1)),
+            unit(
+                "30000000-0000-4000-8000-000000000003",
+                "VANGUARD",
+                (-1, 0),
+            ),
+        ]
+        rangers = [
+            unit(RANGER_1, "RANGER", (2, 0)),
+            unit(RANGER_2, "RANGER", (0, 2)),
+            unit(
+                "30000000-0000-4000-8000-000000000013",
+                "RANGER",
+                (-2, 0),
+            ),
+            unit(
+                "30000000-0000-4000-8000-000000000014",
+                "RANGER",
+                (0, -2),
+            ),
+        ]
+        units = [*workers, *vanguards, *rangers]
+        turn = make_turn(
+            resources=120,
+            units=units,
+            enemies=[enemy_core(ENEMY_1, (3, 0))],
+        )
+        tactic = CoreFarmer(
+            worker_target=17,
+            resource_target=120,
+            raid_policy="stockpile",
+            beacon_policy="hold",
+        )
+        tactic.choose_actions(turn)
+
+        self.assertEqual(turn.resource_space, 0)
+        self.assertTrue(tactic.raid_active)
+        self.assertEqual(tactic.isolated_core_target_id, UUID(ENEMY_1))
+
     def test_four_workers_accumulate_before_expanding_to_six(self) -> None:
         workers = [
             unit(WORKER_1, "WORKER", (1, 0), cargo=0),
