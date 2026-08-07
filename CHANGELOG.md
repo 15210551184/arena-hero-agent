@@ -53,6 +53,9 @@ All notable changes to this project will be documented in this file. The format 
   "手动探测") instead of an inline sidebar panel.
 - Dashboard Units panel gains type filter pills: 全部(总数) / 工人 / 先锋 /
   游侠 with per-type counts; clicking a pill filters the unit list.
+- Fixed a table rendering bug where array rows were interpolated directly,
+  causing a visible run of commas above the Units/Enemies/Resources tables;
+  empty filtered lists now show "无" instead of a blank table.
 - Hierarchical lifecycle and threat assessment with explicit posture/reason diagnostics for alerts, pre-evasion, engagement, multi-axis breakout, recovery, and compatibility hold.
 
 ### Changed

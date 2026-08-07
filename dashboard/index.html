@@ -897,9 +897,12 @@ function etaFor(u, action) {
 }
 
 function tableRows(headers, rows) {
-  if (!rows) return '<div class="empty">无</div>';
+  if (!rows || (Array.isArray(rows) && !rows.length)) {
+    return '<div class="empty">无</div>';
+  }
+  const body = Array.isArray(rows) ? rows.join("") : rows;
   return `<table><thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead>
-    <tbody>${rows}</tbody></table>`;
+    <tbody>${body}</tbody></table>`;
 }
 
 function renderUnits() {
