@@ -295,6 +295,9 @@ class DashboardSnapshotTests(unittest.TestCase):
         self.assertIn("unit_actions", snapshot["plan"])
         self.assertEqual(snapshot["tactic"]["worker_target"], 12)
         self.assertEqual(snapshot["tactic"]["max_fleet_units"], 34)
+        self.assertEqual(snapshot["tactic"]["hunt_squads"], 1)
+        self.assertEqual(snapshot["tactic"]["defense_vanguard_target"], 3)
+        self.assertEqual(snapshot["tactic"]["defense_ranger_target"], 4)
         self.assertEqual(snapshot["tactic"]["resource_target"], 120)
         self.assertEqual(snapshot["tactic"]["raid_policy"], "off")
         self.assertIs(snapshot["tactic"]["raid_active"], False)
@@ -3178,11 +3181,39 @@ class CoreFarmerTests(unittest.TestCase):
             CoreFarmer(raid_policy="aggressive")
 
     def test_max_fleet_units_validation(self) -> None:
-        CoreFarmer(max_fleet_units=105, worker_target=98)
-        with self.assertRaisesRegex(ValueError, "between 1 and 98"):
-            CoreFarmer(max_fleet_units=105, worker_target=99)
+        CoreFarmer(max_fleet_units=105, worker_target=53)
+        with self.assertRaisesRegex(ValueError, "between 1 and 53"):
+            CoreFarmer(max_fleet_units=105, worker_target=54)
         with self.assertRaisesRegex(ValueError, "between 19 and 150"):
             CoreFarmer(max_fleet_units=18)
+
+    def test_hunt_squads_auto_derive_from_fleet_cap(self) -> None:
+        default = CoreFarmer(max_fleet_units=34)
+        self.assertEqual(default.hunt_squads, 1)
+        self.assertEqual(default.defense_vanguard_target, 3)
+        self.assertEqual(default.defense_ranger_target, 4)
+
+        larger = CoreFarmer(max_fleet_units=50, worker_target=33)
+        self.assertEqual(larger.hunt_squads, 3)
+        self.assertEqual(larger.defense_vanguard_target, 7)
+        self.assertEqual(larger.defense_ranger_target, 10)
+        with self.assertRaisesRegex(ValueError, "between 1 and 33"):
+            CoreFarmer(max_fleet_units=50, worker_target=34)
+
+    def test_hunt_squads_explicit_override(self) -> None:
+        tactic = CoreFarmer(
+            max_fleet_units=34,
+            hunt_squads=2,
+            worker_target=22,
+        )
+        self.assertEqual(tactic.defense_vanguard_target, 5)
+        self.assertEqual(tactic.defense_ranger_target, 7)
+        with self.assertRaisesRegex(ValueError, "between 1 and 22"):
+            CoreFarmer(
+                max_fleet_units=34,
+                hunt_squads=2,
+                worker_target=23,
+            )
 
     def test_population_hard_stops_at_fleet_cap_without_self_destruct(self) -> None:
         units = [
@@ -3427,26 +3458,32 @@ class CoreFarmerTests(unittest.TestCase):
                 {
                     "resource_target": 150,
                     "raid_policy": "stockpile",
-                    "worker_target": 40,
+                    "worker_target": 33,
                     "max_fleet_units": 50,
+                    "hunt_squads": 0,
                 }
             )
 
             self.assertEqual(snapshot["resource_target"], 150)
             self.assertEqual(snapshot["raid_policy"], "stockpile")
-            self.assertEqual(snapshot["worker_target"], 40)
+            self.assertEqual(snapshot["worker_target"], 33)
             self.assertEqual(snapshot["max_fleet_units"], 50)
+            self.assertEqual(snapshot["hunt_squads"], 3)
             self.assertEqual(tactic.resource_target, 150)
             self.assertEqual(tactic.raid_policy, "stockpile")
-            self.assertEqual(tactic.worker_target, 40)
+            self.assertEqual(tactic.worker_target, 33)
             self.assertEqual(tactic.max_fleet_units, 50)
+            self.assertEqual(tactic.hunt_squads, 3)
+            self.assertEqual(tactic.defense_vanguard_target, 7)
+            self.assertEqual(tactic.defense_ranger_target, 10)
 
             reloaded = CoreFarmer(worker_target=1, beacon_policy="hold")
             RuntimeConfig(reloaded, path).load()
             self.assertEqual(reloaded.resource_target, 150)
             self.assertEqual(reloaded.raid_policy, "stockpile")
-            self.assertEqual(reloaded.worker_target, 40)
+            self.assertEqual(reloaded.worker_target, 33)
             self.assertEqual(reloaded.max_fleet_units, 50)
+            self.assertEqual(reloaded.hunt_squads, 3)
 
     def test_runtime_config_rejects_invalid_values_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -4646,6 +4683,14 @@ class EventLoopTests(unittest.TestCase):
         self.assertEqual(
             parser.parse_args(["--max-fleet-units", "105"]).max_fleet_units,
             105,
+        )
+
+    def test_hunt_squads_cli_flag_parses(self) -> None:
+        parser = build_parser()
+        self.assertEqual(parser.parse_args([]).hunt_squads, 0)
+        self.assertEqual(
+            parser.parse_args(["--hunt-squads", "3"]).hunt_squads,
+            3,
         )
 
     def test_play_writes_dashboard_snapshot(self) -> None:

@@ -200,11 +200,17 @@ the official `unit_cost()` helper, so production above 20 units correctly
 applies the dynamic v0.14 price tiers.
 
 `--max-fleet-units` sets the hard cap on total controlled Units (19-150,
-default 34). Storage is `population × 5`, so the theoretical maximum bank is
-525 resources at 105 Units (the next Unit is unaffordable beyond that due to
-dynamic pricing). To max out, use `--max-fleet-units 105 --worker-target 98
---resource-target 520`; in Docker Compose set `ARENA_MAX_FLEET_UNITS` in your
-environment.
+default 34). The defense force is organized into hunt groups: each group is
+3 Workers + 2 Vanguards + 3 Rangers, plus a 1+1 home guard. Group count
+auto-derives from the cap as `max(1, (cap − 20) / 8)`: cap 34 → 1 group
+(3 V + 4 R, the classic defense), cap 50 → 3 groups (7 V + 10 R), cap 105 →
+10 groups (21 V + 31 R). Worker target is capped at `cap − vanguards −
+rangers`, so raising the cap grows both groups and room for Workers.
+`--hunt-squads N` overrides the auto-derived group count. Storage is
+`population × 5`, so the theoretical maximum bank is 525 resources at 105
+Units (the next Unit is unaffordable beyond that due to dynamic pricing); at
+that cap the composition is 53 Workers + 21 Vanguards + 31 Rangers. In Docker
+Compose set `ARENA_MAX_FLEET_UNITS` / `ARENA_HUNT_SQUADS` in your environment.
 
 `--resource-target N` enables stockpile mode (default `120`): once Core
 resources reach `N`, the Agent stops discretionary production and shield repair

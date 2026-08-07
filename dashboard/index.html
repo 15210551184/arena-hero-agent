@@ -367,6 +367,7 @@ tbody tr.clickable { cursor: pointer; }
   <div class="config-body">
     <div class="config-row"><span class="config-label">工人目标</span><input type="number" id="cfg-workers" min="1" max="200" inputmode="numeric"></div>
     <div class="config-row"><span class="config-label">舰队上限</span><input type="number" id="cfg-fleet" min="19" max="150" inputmode="numeric"></div>
+    <div class="config-row"><span class="config-label">猎杀组数</span><input type="number" id="cfg-squads" min="0" max="20" inputmode="numeric"><span class="config-msg" id="cfg-squad-hint"></span></div>
     <div class="config-row"><span class="config-label">囤积目标</span><input type="number" id="cfg-target" min="0" max="1000000" step="10" inputmode="numeric"></div>
         <div class="config-row"><span class="config-label">突袭策略</span><span class="config-raid" id="cfg-raid">
           <button type="button" class="pill-btn" data-raid="off">关闭</button>
@@ -851,6 +852,14 @@ function renderConfig() {
   if (fleet && document.activeElement !== fleet) {
     fleet.value = t.max_fleet_units ?? 34;
   }
+  const squads = document.getElementById("cfg-squads");
+  if (squads && document.activeElement !== squads) {
+    squads.value = t.hunt_squads ?? 0;
+  }
+  const hint = document.getElementById("cfg-squad-hint");
+  if (hint) {
+    hint.textContent = `当前先锋 ${t.defense_vanguard_target ?? 3} · 游侠 ${t.defense_ranger_target ?? 4}`;
+  }
   const target = document.getElementById("cfg-target");
   if (target && document.activeElement !== target) {
     target.value = t.resource_target ?? 0;
@@ -986,10 +995,16 @@ document.getElementById("cfg-save").addEventListener("click", async () => {
   }
   const workersEl = document.getElementById("cfg-workers");
   const fleetEl = document.getElementById("cfg-fleet");
+  const squadsEl = document.getElementById("cfg-squads");
   const workerValue = parseInt(workersEl.value, 10);
   const fleetValue = parseInt(fleetEl.value, 10);
-  if (!Number.isInteger(workerValue) || !Number.isInteger(fleetValue)) {
-    msg.textContent = "工人目标/舰队上限必须是整数";
+  const squadsValue = parseInt(squadsEl.value, 10);
+  if (
+    !Number.isInteger(workerValue) ||
+    !Number.isInteger(fleetValue) ||
+    !Number.isInteger(squadsValue)
+  ) {
+    msg.textContent = "工人目标/舰队上限/猎杀组数必须是整数";
     msg.style.color = "var(--threat)";
     return;
   }
@@ -1002,6 +1017,7 @@ document.getElementById("cfg-save").addEventListener("click", async () => {
         raid_policy: cfgRaid,
         worker_target: workerValue,
         max_fleet_units: fleetValue,
+        hunt_squads: squadsValue,
       }),
     });
     const d = await r.json();

@@ -13,6 +13,7 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONUNBUFFERED=1
 Environment=ARENA_WORKER_TARGET=12
 Environment=ARENA_MAX_FLEET_UNITS=34
+Environment=ARENA_HUNT_SQUADS=0
 Environment=ARENA_RESOURCE_TARGET=120
 Environment=ARENA_RAID_POLICY=off
 Environment=ARENA_BEACON_POLICY=retreat
@@ -21,7 +22,7 @@ EnvironmentFile=/etc/arena-hero-agent.env
 EnvironmentFile=-/etc/arena-hero-agent/runtime.env
 RuntimeDirectory=arena-hero-agent
 RuntimeDirectoryMode=0750
-ExecStart=/opt/arena-hero-agent/current/.venv/bin/arena-hero-agent --env-file /etc/arena-hero-agent.env --worker-target ${ARENA_WORKER_TARGET} --max-fleet-units ${ARENA_MAX_FLEET_UNITS} --resource-target ${ARENA_RESOURCE_TARGET} --raid-policy ${ARENA_RAID_POLICY} --beacon-policy ${ARENA_BEACON_POLICY} --heartbeat-file /run/arena-hero-agent/heartbeat.json --stale-turn-timeout-seconds 90
+ExecStart=/opt/arena-hero-agent/current/.venv/bin/arena-hero-agent --env-file /etc/arena-hero-agent.env --worker-target ${ARENA_WORKER_TARGET} --max-fleet-units ${ARENA_MAX_FLEET_UNITS} --hunt-squads ${ARENA_HUNT_SQUADS} --resource-target ${ARENA_RESOURCE_TARGET} --raid-policy ${ARENA_RAID_POLICY} --beacon-policy ${ARENA_BEACON_POLICY} --heartbeat-file /run/arena-hero-agent/heartbeat.json --stale-turn-timeout-seconds 90
 Restart=on-failure
 RestartPreventExitStatus=2 10 11 12 13 14 130
 RestartForceExitStatus=75

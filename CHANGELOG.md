@@ -53,6 +53,11 @@ All notable changes to this project will be documented in this file. The format 
   enemies and the spare Vanguards/Rangers patrol a wider ring and attack
   visible enemy Cores and Units (Workers prioritized) without needing
   stationary/unprotected confirmation.
+- Fleet composition is now organized into hunt groups: each group is
+  3 Workers + 2 Vanguards + 3 Rangers plus a 1+1 home guard, with group count
+  auto-derived from the fleet cap (`max(1, (cap − 20) / 8)`) or overridable
+  via `--hunt-squads`. Raising the cap now grows combat groups instead of
+  adding only Workers.
 - Dashboard Units, Enemies, and Resources panels now scroll independently
   (max-height 220px) instead of stretching the whole sidebar.
 - New `--raid-policy stockpile` offense mode linked to `--resource-target`:

@@ -39,6 +39,8 @@ services:
       - "${ARENA_WORKER_TARGET:-12}"
       - --max-fleet-units
       - "${ARENA_MAX_FLEET_UNITS:-34}"
+      - --hunt-squads
+      - "${ARENA_HUNT_SQUADS:-0}"
       - --resource-target
       - "${ARENA_RESOURCE_TARGET:-120}"
       - --raid-policy

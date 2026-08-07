@@ -59,6 +59,15 @@ EARLY_DEFENSE_VANGUARD_TARGET = 1
 EARLY_DEFENSE_RANGER_TARGET = 1
 DEFENSE_VANGUARD_TARGET = 3
 DEFENSE_RANGER_TARGET = 4
+HUNT_SQUAD_WORKERS = 3
+HUNT_SQUAD_VANGUARDS = 2
+HUNT_SQUAD_RANGERS = 3
+HUNT_SQUAD_SIZE = (
+    HUNT_SQUAD_WORKERS + HUNT_SQUAD_VANGUARDS + HUNT_SQUAD_RANGERS
+)
+HUNT_SQUAD_BASE = 20
+HOME_DEFENSE_VANGUARDS = 1
+HOME_DEFENSE_RANGERS = 1
 MAX_FLEET_UNITS = 34
 MAX_FLEET_UNITS_LIMIT = 150
 MAX_WORKER_TARGET = MAX_FLEET_UNITS - DEFENSE_VANGUARD_TARGET - DEFENSE_RANGER_TARGET
@@ -657,6 +666,9 @@ def build_snapshot(
             "strategy_phase": tactic.strategy_phase(turn),
             "worker_target": tactic.worker_target,
             "max_fleet_units": tactic.max_fleet_units,
+            "hunt_squads": tactic.hunt_squads,
+            "defense_vanguard_target": tactic.defense_vanguard_target,
+            "defense_ranger_target": tactic.defense_ranger_target,
             "resource_target": tactic.resource_target,
             "raid_policy": tactic.raid_policy,
             "raid_active": tactic.raid_active,
@@ -1900,6 +1912,9 @@ class RuntimeConfig:
             "raid_policy": self._tactic.raid_policy,
             "worker_target": self._tactic.worker_target,
             "max_fleet_units": self._tactic.max_fleet_units,
+            "hunt_squads": self._tactic.hunt_squads,
+            "defense_vanguard_target": self._tactic.defense_vanguard_target,
+            "defense_ranger_target": self._tactic.defense_ranger_target,
         }
 
     def apply(
@@ -1912,6 +1927,7 @@ class RuntimeConfig:
         new_policy = self._tactic.raid_policy
         new_worker_target = self._tactic.worker_target
         new_max_fleet = self._tactic.max_fleet_units
+        new_hunt_squads = self._tactic.hunt_squads
         resource_target = payload.get("resource_target")
         if resource_target is not None:
             if (
@@ -1953,9 +1969,28 @@ class RuntimeConfig:
                     f"{MAX_FLEET_UNITS_LIMIT}"
                 )
             new_max_fleet = max_fleet_units
-        max_worker_target = (
-            new_max_fleet - DEFENSE_VANGUARD_TARGET - DEFENSE_RANGER_TARGET
+        hunt_squads = payload.get("hunt_squads")
+        if hunt_squads is not None:
+            if (
+                not isinstance(hunt_squads, int)
+                or isinstance(hunt_squads, bool)
+                or not 0 <= hunt_squads <= 20
+            ):
+                raise ValueError(
+                    "hunt_squads must be an integer between 0 and 20"
+                )
+            new_hunt_squads = hunt_squads
+        squads = new_hunt_squads
+        if squads == 0:
+            squads = max(
+                1,
+                (new_max_fleet - HUNT_SQUAD_BASE) // HUNT_SQUAD_SIZE,
+            )
+        defense_vanguards = (
+            HOME_DEFENSE_VANGUARDS + squads * HUNT_SQUAD_VANGUARDS
         )
+        defense_rangers = HOME_DEFENSE_RANGERS + squads * HUNT_SQUAD_RANGERS
+        max_worker_target = new_max_fleet - defense_vanguards - defense_rangers
         if not 1 <= new_worker_target <= max_worker_target:
             raise ValueError(
                 f"worker_target must be between 1 and {max_worker_target}"
@@ -1968,6 +2003,9 @@ class RuntimeConfig:
         self._tactic.raid_policy = new_policy
         self._tactic.worker_target = new_worker_target
         self._tactic.max_fleet_units = new_max_fleet
+        self._tactic.hunt_squads = squads
+        self._tactic.defense_vanguard_target = defense_vanguards
+        self._tactic.defense_ranger_target = defense_rangers
         if persist:
             self._save()
         return self.snapshot()
@@ -1988,6 +2026,7 @@ class CoreFarmer:
         resource_target: int = DEFAULT_RESOURCE_TARGET,
         raid_policy: str = DEFAULT_RAID_POLICY,
         max_fleet_units: int = MAX_FLEET_UNITS,
+        hunt_squads: int = 0,
         beacon_policy: str = DEFAULT_BEACON_POLICY,
         compatibility_marker: Path | None = DEFAULT_COMPATIBILITY_MARKER,
     ) -> None:
@@ -1995,8 +2034,24 @@ class CoreFarmer:
             raise ValueError(
                 f"max_fleet_units must be between 19 and {MAX_FLEET_UNITS_LIMIT}"
             )
+        if not 0 <= hunt_squads <= 20:
+            raise ValueError("hunt_squads must be between 0 and 20")
+        if hunt_squads == 0:
+            hunt_squads = max(
+                1,
+                (max_fleet_units - HUNT_SQUAD_BASE) // HUNT_SQUAD_SIZE,
+            )
+        self.hunt_squads = hunt_squads
+        self.defense_vanguard_target = (
+            HOME_DEFENSE_VANGUARDS + hunt_squads * HUNT_SQUAD_VANGUARDS
+        )
+        self.defense_ranger_target = (
+            HOME_DEFENSE_RANGERS + hunt_squads * HUNT_SQUAD_RANGERS
+        )
         max_worker_target = (
-            max_fleet_units - DEFENSE_VANGUARD_TARGET - DEFENSE_RANGER_TARGET
+            max_fleet_units
+            - self.defense_vanguard_target
+            - self.defense_ranger_target
         )
         if not 1 <= worker_target <= max_worker_target:
             raise ValueError(
@@ -2096,8 +2151,8 @@ class CoreFarmer:
         if len(turn.workers) < self.worker_target:
             return "EXPANSION"
         if (
-            len(turn.vanguards) < DEFENSE_VANGUARD_TARGET
-            or len(turn.rangers) < DEFENSE_RANGER_TARGET
+            len(turn.vanguards) < self.defense_vanguard_target
+            or len(turn.rangers) < self.defense_ranger_target
         ):
             return "FORTIFY"
         return "STOCKPILE"
@@ -2844,12 +2899,12 @@ class CoreFarmer:
 
         vanguard_strike_group = tuple(
             sorted(turn.vanguards, key=_uuid_sort_key)[
-                VANGUARD_CORE_GUARDS:DEFENSE_VANGUARD_TARGET
+                VANGUARD_CORE_GUARDS:self.defense_vanguard_target
             ]
         )
         ranger_strike_group = tuple(
             sorted(turn.rangers, key=_uuid_sort_key)[
-                RANGER_CORE_GUARDS:DEFENSE_RANGER_TARGET
+                RANGER_CORE_GUARDS:self.defense_ranger_target
             ]
         )
         visible_cores = {
@@ -4066,8 +4121,8 @@ class CoreFarmer:
         )
         self._control_core(turn, context, combat_target)
 
-    @staticmethod
     def _strike_group_ids(
+        self,
         turn: Turn,
         target: object | None,
     ) -> tuple[set[UUID], set[UUID]]:
@@ -4080,12 +4135,14 @@ class CoreFarmer:
                 {
                     unit.id
                     for unit in vanguards[
-                        VANGUARD_CORE_GUARDS:DEFENSE_VANGUARD_TARGET
+                        VANGUARD_CORE_GUARDS:self.defense_vanguard_target
                     ]
                 },
                 {
                     unit.id
-                    for unit in rangers[RANGER_CORE_GUARDS:DEFENSE_RANGER_TARGET]
+                    for unit in rangers[
+                        RANGER_CORE_GUARDS:self.defense_ranger_target
+                    ]
                 },
             )
 
@@ -4951,7 +5008,7 @@ class CoreFarmer:
             if (
                 nearest_threat is not None
                 and nearest_threat <= 3
-                and len(turn.vanguards) < DEFENSE_VANGUARD_TARGET
+                and len(turn.vanguards) < self.defense_vanguard_target
                 and turn.resources
                 >= unit_cost(UnitType.VANGUARD, turn.state.population)
             ):
@@ -4961,7 +5018,7 @@ class CoreFarmer:
                 nearest_threat is not None
                 and nearest_threat <= 6
                 and len(turn.workers) >= 4
-                and len(turn.rangers) < DEFENSE_RANGER_TARGET
+                and len(turn.rangers) < self.defense_ranger_target
                 and turn.resources
                 >= unit_cost(UnitType.RANGER, turn.state.population)
             ):
@@ -5033,7 +5090,10 @@ class CoreFarmer:
                 and nearest_threat is None
                 and turn.resources >= LONG_TERM_DEFENSE_RESERVE
             )
-            if mature_for_defense and len(turn.vanguards) < DEFENSE_VANGUARD_TARGET:
+            if (
+                mature_for_defense
+                and len(turn.vanguards) < self.defense_vanguard_target
+            ):
                 if turn.resources >= LONG_TERM_DEFENSE_RESERVE + unit_cost(
                     UnitType.VANGUARD,
                     turn.state.population,
@@ -5042,8 +5102,8 @@ class CoreFarmer:
                     return
             if (
                 mature_for_defense
-                and len(turn.vanguards) >= DEFENSE_VANGUARD_TARGET
-                and len(turn.rangers) < DEFENSE_RANGER_TARGET
+                and len(turn.vanguards) >= self.defense_vanguard_target
+                and len(turn.rangers) < self.defense_ranger_target
             ):
                 if turn.resources >= LONG_TERM_DEFENSE_RESERVE + unit_cost(
                     UnitType.RANGER,
@@ -5371,6 +5431,7 @@ def _position_diagnostics(turn: Turn, tactic: CoreFarmer) -> str:
         f"resource_blocked={resource_blocked} "
         f"resource_target={tactic.resource_target} "
         f"fleet_cap={tactic.max_fleet_units} "
+        f"hunt_squads={tactic.hunt_squads} "
         f"raid_policy={tactic.raid_policy} "
         f"raid={int(tactic.raid_active)} "
         f"stockpile={int(tactic._stockpile_hit(turn))} "
@@ -5549,6 +5610,7 @@ def play(
     resource_target: int = DEFAULT_RESOURCE_TARGET,
     raid_policy: str = DEFAULT_RAID_POLICY,
     max_fleet_units: int = MAX_FLEET_UNITS,
+    hunt_squads: int = 0,
     beacon_policy: str,
     compatibility_marker: Path | None = DEFAULT_COMPATIBILITY_MARKER,
     heartbeat_file: Path | None = None,
@@ -5569,6 +5631,7 @@ def play(
         resource_target=resource_target,
         raid_policy=raid_policy,
         max_fleet_units=max_fleet_units,
+        hunt_squads=hunt_squads,
         beacon_policy=beacon_policy,
         compatibility_marker=compatibility_marker,
     )
@@ -5728,6 +5791,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--hunt-squads",
+        type=int,
+        default=0,
+        help=(
+            "Number of hunt groups; each group is 3 Workers + 2 Vanguards + "
+            "3 Rangers. 0 auto-derives groups from the fleet cap."
+        ),
+    )
+    parser.add_argument(
         "--beacon-policy",
         choices=("hold", "pursue", "retreat"),
         default=DEFAULT_BEACON_POLICY,
@@ -5803,6 +5875,7 @@ def main(argv: list[str] | None = None) -> int:
             resource_target=args.resource_target,
             raid_policy=args.raid_policy,
             max_fleet_units=args.max_fleet_units,
+            hunt_squads=args.hunt_squads,
             beacon_policy=args.beacon_policy,
             compatibility_marker=args.compatibility_marker,
             heartbeat_file=args.heartbeat_file,
