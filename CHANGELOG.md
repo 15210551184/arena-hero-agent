@@ -38,6 +38,11 @@ All notable changes to this project will be documented in this file. The format 
   no longer deadlock around the Core.
 - Dashboard Units, Enemies, and Resources panels now scroll independently
   (max-height 220px) instead of stretching the whole sidebar.
+- New `--raid-policy stockpile` offense mode linked to `--resource-target`:
+  once the bank target is reached, the Agent raids the nearest enemy Core with
+  the spare defense fleet, then returns to stockpiling until the target is
+  reached again. Raiding releases stockpile spending holds so heals, repairs,
+  and replacement spawns can support the strike.
 - Hierarchical lifecycle and threat assessment with explicit posture/reason diagnostics for alerts, pre-evasion, engagement, multi-axis breakout, recovery, and compatibility hold.
 
 ### Changed

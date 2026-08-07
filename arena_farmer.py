@@ -46,6 +46,7 @@ DEFAULT_COMPATIBILITY_MARKER = Path(
 )
 DEFAULT_WORKER_TARGET = 12
 DEFAULT_RESOURCE_TARGET = 0
+DEFAULT_RAID_POLICY = "off"
 DEFAULT_BEACON_POLICY = "retreat"
 BASE_WORKER_TARGET = 6
 CORE_RESOURCE_RESERVE = 10
@@ -652,6 +653,8 @@ def build_snapshot(
             "strategy_phase": tactic.strategy_phase(turn),
             "worker_target": tactic.worker_target,
             "resource_target": tactic.resource_target,
+            "raid_policy": tactic.raid_policy,
+            "raid_active": tactic.raid_active,
             "stockpile_active": tactic._stockpile_hit(turn),
             "beacon_policy": tactic.beacon_policy,
             "global_posture": threat.global_posture.value,
@@ -1819,6 +1822,7 @@ class CoreFarmer:
         *,
         worker_target: int = DEFAULT_WORKER_TARGET,
         resource_target: int = DEFAULT_RESOURCE_TARGET,
+        raid_policy: str = DEFAULT_RAID_POLICY,
         beacon_policy: str = DEFAULT_BEACON_POLICY,
         compatibility_marker: Path | None = DEFAULT_COMPATIBILITY_MARKER,
     ) -> None:
@@ -1828,13 +1832,21 @@ class CoreFarmer:
             )
         if not 0 <= resource_target <= 1_000_000:
             raise ValueError("resource_target must be between 0 and 1000000")
+        if raid_policy not in {"off", "stockpile"}:
+            raise ValueError("raid_policy must be 'off' or 'stockpile'")
+        if raid_policy == "stockpile" and resource_target <= 0:
+            raise ValueError(
+                "raid_policy 'stockpile' requires resource_target > 0"
+            )
         if beacon_policy not in {"hold", "pursue", "retreat"}:
             raise ValueError("beacon_policy must be 'hold', 'pursue', or 'retreat'")
         self.worker_target = worker_target
         self.resource_target = resource_target
+        self.raid_policy = raid_policy
         self.beacon_policy = beacon_policy
         self.compatibility_marker = compatibility_marker
         self.compatibility_hold = False
+        self.raid_active = False
         self.known_obstacles: set[Position] = set()
         self.scout_slots: dict[UUID, int] = {}
         self.scout_stages: dict[UUID, int] = {}
@@ -1899,7 +1911,7 @@ class CoreFarmer:
             self.isolated_core_target_id is not None
             or self.stationary_unit_target_id is not None
         ):
-            return "CLEAR_CORE"
+            return "RAID" if self.raid_active else "CLEAR_CORE"
         early_worker_goal = min(EARLY_DEFENSE_WORKER_GOAL, self.worker_target)
         if len(turn.workers) < early_worker_goal:
             return "EXPANSION"
@@ -1919,6 +1931,19 @@ class CoreFarmer:
 
     def _stockpile_hit(self, turn: Turn) -> bool:
         return self.resource_target > 0 and turn.resources >= self.resource_target
+
+    def _raid_mode_armed(self) -> bool:
+        return self.raid_policy == "stockpile" and self.resource_target > 0
+
+    def _raid_triggered(self, turn: Turn) -> bool:
+        return self._raid_mode_armed() and self._stockpile_hit(turn)
+
+    def _spending_holds(self, turn: Turn) -> bool:
+        return (
+            self._stockpile_hit(turn)
+            and not self.raid_active
+            and not self._raid_triggered(turn)
+        )
 
     def _prune_known_obstacles(self, core_position: Position) -> None:
         if len(self.known_obstacles) <= MAX_KNOWN_OBSTACLES:
@@ -2608,13 +2633,14 @@ class CoreFarmer:
 
     def _select_isolated_core_target(self, turn: Turn) -> CoreRaidTarget | None:
         core = turn.core
-        if (
-            core is None
-            or self.recovery_mode
-        ):
+        if core is None or self.recovery_mode:
             self._release_core_raid()
             return None
-        if core.hp < 5 or core.shield < 5:
+        raid_mode = self._raid_mode_armed()
+        if raid_mode and not self.raid_active and not self._raid_triggered(turn):
+            self._release_core_raid()
+            return None
+        if not raid_mode and (core.hp < 5 or core.shield < 5):
             self._release_core_raid()
             return None
         if turn.resources < ISOLATED_CORE_MIN_RESOURCES:
@@ -2629,7 +2655,7 @@ class CoreFarmer:
         ):
             self._release_core_raid()
             return None
-        if any(
+        if not raid_mode and any(
             defender.hp < _unit_max_hp(defender.unit_type)
             for defender in (*turn.vanguards, *turn.rangers)
         ):
@@ -2656,6 +2682,44 @@ class CoreFarmer:
             target_id = self.isolated_core_target_id
             remembered = self.stationary_core_memory.get(target_id)
             visible_target = visible_cores.get(target_id)
+            if raid_mode:
+                target_position = (
+                    visible_target.position
+                    if visible_target is not None
+                    else remembered.position
+                    if remembered is not None
+                    else None
+                )
+                if target_position is None or (
+                    visible_target is None
+                    and turn.tick - remembered.last_tick > CORE_RAID_MEMORY_TTL
+                ):
+                    self._release_core_raid()
+                    return None
+                if (
+                    visible_target is not None
+                    and visible_target.state is not CoreState.NORMAL
+                ):
+                    self._release_core_raid()
+                    return None
+                if _core_raid_strike_distance(
+                    target_position,
+                    vanguard_strike_group,
+                    ranger_strike_group,
+                ) > CORE_RAID_STRIKE_RELEASE_DISTANCE:
+                    self._release_core_raid()
+                    return None
+                if visible_target is None and any(
+                    _distance(defender.position, target_position) <= 1
+                    for defender in (*vanguard_strike_group, *ranger_strike_group)
+                ):
+                    self._release_core_raid(forget_position=True)
+                    return None
+                return CoreRaidTarget(
+                    id=target_id,
+                    position=target_position,
+                    visible_enemy=visible_target,
+                )
             if (
                 remembered is None
                 or turn.tick - remembered.last_tick > CORE_RAID_MEMORY_TTL
@@ -2686,6 +2750,64 @@ class CoreFarmer:
                 id=target_id,
                 position=remembered.position,
                 visible_enemy=visible_target,
+            )
+
+        if raid_mode:
+            candidates: list[tuple[object, ...]] = []
+            for enemy_core in visible_cores.values():
+                if enemy_core.state is not CoreState.NORMAL:
+                    continue
+                candidates.append(
+                    (
+                        _distance(core.position, enemy_core.position),
+                        _core_raid_strike_distance(
+                            enemy_core.position,
+                            vanguard_strike_group,
+                            ranger_strike_group,
+                        ),
+                        _uuid_sort_key(enemy_core),
+                        enemy_core.id,
+                        enemy_core.position,
+                        enemy_core,
+                    )
+                )
+            for core_id, sighting in self.stationary_core_memory.items():
+                if core_id in visible_cores:
+                    continue
+                if turn.tick - sighting.last_tick > CORE_RAID_MEMORY_TTL:
+                    continue
+                candidates.append(
+                    (
+                        _distance(core.position, sighting.position),
+                        _core_raid_strike_distance(
+                            sighting.position,
+                            vanguard_strike_group,
+                            ranger_strike_group,
+                        ),
+                        core_id.bytes,
+                        core_id,
+                        sighting.position,
+                        None,
+                    )
+                )
+            if not candidates:
+                return None
+            _, _, _, target_id, target_position, visible_enemy = min(candidates)
+            self.isolated_core_target_id = target_id
+            observer_id = self.core_observer_candidates.get(target_id)
+            living_empty_workers = {
+                worker.id
+                for worker in turn.workers
+                if worker.cargo == 0
+            }
+            self.core_observer_target_id = target_id
+            self.core_raid_spotter_id = (
+                observer_id if observer_id in living_empty_workers else None
+            )
+            return CoreRaidTarget(
+                id=target_id,
+                position=target_position,
+                visible_enemy=visible_enemy,
             )
 
         candidates = []
@@ -3368,6 +3490,10 @@ class CoreFarmer:
             isolated_core_target = None
         else:
             isolated_core_target = self._select_isolated_core_target(turn)
+        self.raid_active = (
+            self._raid_mode_armed()
+            and self.isolated_core_target_id is not None
+        )
         stationary_unit_target = None
         if (
             not self.compatibility_hold
@@ -3502,7 +3628,7 @@ class CoreFarmer:
             tick=turn.tick,
             blocked=resource_route_blocked,
         )
-        if self._stockpile_hit(turn):
+        if self._spending_holds(turn):
             self.resource_intents = {}
             resource_assignments = {}
         else:
@@ -3607,7 +3733,7 @@ class CoreFarmer:
                 elif core.view.state is not CoreState.NORMAL:
                     worker.wait()
                     self._set_worker_mode(worker, "WAIT_CORE", core.position)
-                elif self._stockpile_hit(turn):
+                elif self._spending_holds(turn):
                     worker.wait()
                     self._set_worker_mode(worker, "STOCKPILE_HOLD", core.position)
                 else:
@@ -4498,7 +4624,7 @@ class CoreFarmer:
             and
             context.friendly_counts[core.position] < 2
             and len(turn.units) < MAX_FLEET_UNITS
-            and not self._stockpile_hit(turn)
+            and not self._spending_holds(turn)
         )
         nearest_threat = min(
             (
@@ -4548,7 +4674,7 @@ class CoreFarmer:
         if (
             core.shield < 5
             and turn.resources >= 1
-            and not self._stockpile_hit(turn)
+            and not self._spending_holds(turn)
         ):
             core.repair_shield()
             return
@@ -4994,6 +5120,8 @@ def _position_diagnostics(turn: Turn, tactic: CoreFarmer) -> str:
         f"delivery_blocked={delivery_blocked} "
         f"resource_blocked={resource_blocked} "
         f"resource_target={tactic.resource_target} "
+        f"raid_policy={tactic.raid_policy} "
+        f"raid={int(tactic.raid_active)} "
         f"stockpile={int(tactic._stockpile_hit(turn))} "
         f"scout_chunks={len(tactic.scout_chunk_last_seen)} "
         f"scout_oldest_age={scout_oldest_age} "
@@ -5168,6 +5296,7 @@ def play(
     base_url: str,
     worker_target: int,
     resource_target: int = DEFAULT_RESOURCE_TARGET,
+    raid_policy: str = DEFAULT_RAID_POLICY,
     beacon_policy: str,
     compatibility_marker: Path | None = DEFAULT_COMPATIBILITY_MARKER,
     heartbeat_file: Path | None = None,
@@ -5186,6 +5315,7 @@ def play(
     tactic = CoreFarmer(
         worker_target=worker_target,
         resource_target=resource_target,
+        raid_policy=raid_policy,
         beacon_policy=beacon_policy,
         compatibility_marker=compatibility_marker,
     )
@@ -5317,6 +5447,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--raid-policy",
+        choices=("off", "stockpile"),
+        default=DEFAULT_RAID_POLICY,
+        help=(
+            "'stockpile' raids the nearest enemy Core once resources reach "
+            "--resource-target, then returns to stockpiling; 'off' keeps the "
+            "conservative confirmed-stationary raid behavior."
+        ),
+    )
+    parser.add_argument(
         "--beacon-policy",
         choices=("hold", "pursue", "retreat"),
         default=DEFAULT_BEACON_POLICY,
@@ -5390,6 +5530,7 @@ def main(argv: list[str] | None = None) -> int:
             base_url=args.base_url,
             worker_target=args.worker_target,
             resource_target=args.resource_target,
+            raid_policy=args.raid_policy,
             beacon_policy=args.beacon_policy,
             compatibility_marker=args.compatibility_marker,
             heartbeat_file=args.heartbeat_file,

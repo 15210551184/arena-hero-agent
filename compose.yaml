@@ -39,6 +39,8 @@ services:
       - "${ARENA_WORKER_TARGET:-12}"
       - --resource-target
       - "${ARENA_RESOURCE_TARGET:-0}"
+      - --raid-policy
+      - "${ARENA_RAID_POLICY:-off}"
       - --beacon-policy
       - "${ARENA_BEACON_POLICY:-retreat}"
       - --no-compatibility-marker

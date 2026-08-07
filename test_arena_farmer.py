@@ -294,6 +294,8 @@ class DashboardSnapshotTests(unittest.TestCase):
         self.assertIn("unit_actions", snapshot["plan"])
         self.assertEqual(snapshot["tactic"]["worker_target"], 12)
         self.assertEqual(snapshot["tactic"]["resource_target"], 0)
+        self.assertEqual(snapshot["tactic"]["raid_policy"], "off")
+        self.assertIs(snapshot["tactic"]["raid_active"], False)
         self.assertIs(snapshot["tactic"]["stockpile_active"], False)
         self.assertIn("strategy_phase", snapshot["tactic"])
         self.assertIn("global_posture", snapshot["tactic"])
@@ -3164,6 +3166,12 @@ class CoreFarmerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "between 1 and 27"):
             CoreFarmer(worker_target=MAX_WORKER_TARGET + 1)
 
+    def test_raid_policy_requires_stockpile_target(self) -> None:
+        with self.assertRaisesRegex(ValueError, "requires resource_target > 0"):
+            CoreFarmer(raid_policy="stockpile", resource_target=0)
+        with self.assertRaisesRegex(ValueError, "must be 'off' or 'stockpile'"):
+            CoreFarmer(raid_policy="aggressive")
+
     def test_population_hard_stops_at_fleet_cap_without_self_destruct(self) -> None:
         units = [
             unit(
@@ -3352,6 +3360,98 @@ class CoreFarmerTests(unittest.TestCase):
         self.assertLessEqual(len(tactic.known_obstacles), MAX_KNOWN_OBSTACLES)
         self.assertIn((2, 0), tactic.known_obstacles)
         self.assertIn((3, 0), tactic.known_obstacles)
+
+    @staticmethod
+    def _raid_fleet() -> list[dict[str, object]]:
+        workers = [
+            unit(
+                f"20000000-0000-4000-8000-{index:012x}",
+                "WORKER",
+                (20 + index, 20),
+                cargo=0,
+            )
+            for index in range(15)
+        ]
+        vanguards = [
+            unit(VANGUARD_1, "VANGUARD", (1, 0)),
+            unit(VANGUARD_2, "VANGUARD", (0, 1)),
+            unit(
+                "30000000-0000-4000-8000-000000000003",
+                "VANGUARD",
+                (-1, 0),
+            ),
+        ]
+        rangers = [
+            unit(RANGER_1, "RANGER", (2, 0)),
+            unit(RANGER_2, "RANGER", (0, 2)),
+            unit(
+                "30000000-0000-4000-8000-000000000013",
+                "RANGER",
+                (-2, 0),
+            ),
+            unit(
+                "30000000-0000-4000-8000-000000000014",
+                "RANGER",
+                (0, -2),
+            ),
+        ]
+        return [*workers, *vanguards, *rangers]
+
+    def test_raid_mode_targets_nearest_visible_core_when_stockpile_reached(
+        self,
+    ) -> None:
+        turn = make_turn(
+            resources=100,
+            units=self._raid_fleet(),
+            enemies=[
+                enemy_core(ENEMY_1, (3, 0)),
+                enemy_core(ENEMY_2, (10, 0)),
+            ],
+        )
+        tactic = CoreFarmer(
+            worker_target=15,
+            resource_target=100,
+            raid_policy="stockpile",
+            beacon_policy="hold",
+        )
+        tactic.choose_actions(turn)
+
+        self.assertTrue(tactic.raid_active)
+        self.assertEqual(tactic.isolated_core_target_id, UUID(ENEMY_1))
+        self.assertFalse(tactic._spending_holds(turn))
+
+    def test_raid_mode_waits_until_stockpile_target(self) -> None:
+        turn = make_turn(
+            resources=99,
+            units=self._raid_fleet(),
+            enemies=[enemy_core(ENEMY_1, (3, 0))],
+        )
+        tactic = CoreFarmer(
+            worker_target=15,
+            resource_target=100,
+            raid_policy="stockpile",
+            beacon_policy="hold",
+        )
+        tactic.choose_actions(turn)
+
+        self.assertFalse(tactic.raid_active)
+        self.assertIsNone(tactic.isolated_core_target_id)
+
+    def test_raid_mode_finds_no_target_without_enemy_core(self) -> None:
+        turn = make_turn(
+            resources=100,
+            units=self._raid_fleet(),
+        )
+        tactic = CoreFarmer(
+            worker_target=15,
+            resource_target=100,
+            raid_policy="stockpile",
+            beacon_policy="hold",
+        )
+        tactic.choose_actions(turn)
+
+        self.assertFalse(tactic.raid_active)
+        self.assertIsNone(tactic.isolated_core_target_id)
 
     def test_four_workers_accumulate_before_expanding_to_six(self) -> None:
         workers = [
@@ -4326,6 +4426,14 @@ class EventLoopTests(unittest.TestCase):
     def test_resource_target_cli_flag_parses(self) -> None:
         args = build_parser().parse_args(["--resource-target", "150"])
         self.assertEqual(args.resource_target, 150)
+
+    def test_raid_policy_cli_flag_parses(self) -> None:
+        parser = build_parser()
+        self.assertEqual(parser.parse_args([]).raid_policy, "off")
+        self.assertEqual(
+            parser.parse_args(["--raid-policy", "stockpile"]).raid_policy,
+            "stockpile",
+        )
 
     def test_play_writes_dashboard_snapshot(self) -> None:
         events: list[Turn] = [

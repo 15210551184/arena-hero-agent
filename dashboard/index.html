@@ -707,7 +707,7 @@ const ACTION_ZH = {
 };
 const ZH_PHASE = {
   EXPANSION: "扩张期", FORTIFY: "布防期", STOCKPILE: "囤积期", CLEAR_CORE: "清敌",
-  RECOVERY: "恢复中", RESPAWNING: "重生中", COMPATIBILITY_HOLD: "兼容冻结",
+  RAID: "突袭中", RECOVERY: "恢复中", RESPAWNING: "重生中", COMPATIBILITY_HOLD: "兼容冻结",
 };
 const ZH_THREAT = {
   NORMAL: "正常", ALERT: "警戒", PRE_EVADE: "预撤离", ENGAGED: "交战中", BREAKOUT: "突围",
@@ -810,6 +810,7 @@ function renderCore() {
     const reached = (data.resources ?? 0) >= tgt;
     meta += ` · 囤积目标 ${tgt}${reached ? " ✓ 已达" : ""}`;
   }
+  if (data.tactic?.raid_active) meta += " · 突袭中";
   document.getElementById("core-meta").textContent = meta;
 }
 
